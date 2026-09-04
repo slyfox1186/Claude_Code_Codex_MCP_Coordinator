@@ -167,9 +167,13 @@ agent-duet doctor              # health report
 agent-duet runs                # every run, newest first
 agent-duet logs [run-id]       # everything about one run (default: the most recent)
 agent-duet cancel <run-id>     # clear an unfinished run and free its slot
-agent-duet gc --older-than 30  # dry run: list old terminal-run artifacts
+agent-duet gc --older-than 30  # dry run: list what old terminal runs left behind
 agent-duet gc --older-than 30 --apply
 ```
+
+`gc` forgets a terminal run completely: its artifact directories, git's worktree
+registration in the real repository, and its row in the listing. It never deletes a
+run's branch -- that holds the work -- so it reports the branches it orphans instead.
 
 `cancel` accepts an id prefix. It exists because a run parked at `AWAITING_FINALIZE`
 has no live worker and is never reaped -- it is waiting for a person -- yet it still

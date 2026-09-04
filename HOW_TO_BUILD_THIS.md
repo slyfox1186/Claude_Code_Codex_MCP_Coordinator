@@ -348,11 +348,14 @@ Operator commands:
 
 ```bash
 agent-duet doctor                          # health report, never prints credentials
-agent-duet gc --older-than 30              # dry run: list old terminal-run artifacts
+agent-duet gc --older-than 30              # dry run: list what old terminal runs left behind
 agent-duet gc --older-than 30 --apply      # remove exactly what the dry run listed
 ```
 
 `gc` only ever touches directories inside the state tree, and only for terminal runs.
+It also unregisters each worktree with git rather than deleting it behind git's back,
+and forgets the run's row so the listing does not grow forever. Branches survive: a
+run's branch holds its work, so `gc` names the ones it orphans and leaves them to you.
 
 ---
 
