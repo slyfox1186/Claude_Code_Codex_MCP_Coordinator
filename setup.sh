@@ -334,6 +334,24 @@ def detect(root: pathlib.Path) -> tuple[list[str], str] | None:
         return ["cargo", "test"], "cargo test"
     if (root / "go.mod").is_file():
         return ["go", "test", "./..."], "go test"
+    pwsh = shutil.which("pwsh") or shutil.which("powershell")
+    if pwsh and any(root.rglob("*.Tests.ps1")):
+        return [pwsh, "-NoProfile", "-Command", "Invoke-Pester -CI"], "Pester"
+    if pwsh and (any(root.rglob("*.ps1")) or any(root.rglob("*.psm1"))):
+        # No test framework, but a syntax error is still worth catching, and a repo
+        # with no check at all gets nothing standing behind its runs.
+        return [
+            pwsh, "-NoProfile", "-Command",
+            "$bad = 0; Get-ChildItem -Recurse -Include *.ps1,*.psm1,*.psd1 | "
+            "ForEach-Object { $errors = $null; "
+            "[System.Management.Automation.Language.Parser]::ParseFile("
+            "$_.FullName, [ref]$null, [ref]$errors) > $null; "
+            "if ($errors) { $bad++; Write-Host $_.FullName } }; exit $bad",
+        ], "PowerShell parse check (no test framework found)"
+    makefile = root / "Makefile"
+    if makefile.is_file() and re.search(r"^test\s*:", makefile.read_text(errors="replace"),
+                                        flags=re.M):
+        return ["make", "test"], "make test"
     return None
 
 found = detect(repo_path)
@@ -343,8 +361,21 @@ if found:
     print(f"    validation check: {label}")
 else:
     command, rendered = [], "[]"
-    print("    no test suite found, so no independent check will run after a run.")
-    print("    Add one later by editing validation_commands in your config.")
+    print("")
+    print("    WARNING: no test suite or check was found for this project.")
+    print("    Nothing independent will verify a run's work -- the only thing behind")
+    print("    it will be what the two models claim about their own output.")
+    print("")
+    print(f"    To fix that, open {config_path}, find this project's")
+    print("    [[repositories]] block, and put your real check in validation_commands:")
+    print("")
+    print('      validation_commands = [')
+    print('        ["/path/to/your/test/command", "--flag"],')
+    print('      ]')
+    print("")
+    print("    It is a command vector, not a shell string, and it runs from the")
+    print("    project root. Then re-run: agent-duet doctor")
+    print("")
 
 existing = {r["path"] for r in data.get("repositories", [])}
 if repo in existing and BEGIN not in text:

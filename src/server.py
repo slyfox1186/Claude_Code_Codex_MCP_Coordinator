@@ -25,6 +25,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError as McpToolError
 from mcp.types import ToolAnnotations
 
 from . import __version__
@@ -112,8 +113,15 @@ class _Runtime:
 RUNTIME = _Runtime()
 
 
-class ToolError(RuntimeError):
-    """An operator-facing error message. Raised instead of returning a fake status."""
+class ToolError(McpToolError):
+    """An operator-facing error message. Raised instead of returning a fake status.
+
+    It must subclass the SDK's ``ToolError``. That is the only exception type the tool
+    layer treats as *anticipated*: it reaches the caller as ``is_error`` with this text
+    intact. Anything else is treated as a crash, and the model is handed a bare
+    "Error executing tool <name>" with the reason left behind in the server log --
+    which makes every refusal here unactionable.
+    """
 
 
 def _fail(message: str) -> ToolError:
@@ -138,9 +146,23 @@ def create_run(config: Config, store: StateStore, request: StartRequest) -> RunR
         logger.info("duet_start: reaped %d crashed run(s) for %s", len(reaped), info.path)
     global_active = store.active_runs()
     if len(global_active) >= config.max_parallel_global:
+        # Name them. Without this the caller has to go digging in sqlite to find out
+        # what is holding the slot, which is exactly what the limit should tell them.
+        blocking = "; ".join(
+            f"{record.run_id} is {record.phase.value} on {record.repo_path}"
+            for record in global_active
+        )
+        waiting = [r for r in global_active if r.phase is Phase.AWAITING_FINALIZE]
+        advice = (
+            f"call duet_finalize or duet_cancel on {waiting[0].run_id} -- it is waiting "
+            "on you and will not advance by itself"
+            if waiting
+            else "wait for it to finish, or call duet_cancel on it"
+        )
         raise _fail(
-            f"{len(global_active)} run(s) are already active and max_parallel_global is "
-            f"{config.max_parallel_global}; wait for them to finish or cancel one"
+            f"cannot start: {len(global_active)} run(s) already active and "
+            f"max_parallel_global is {config.max_parallel_global}. Active: {blocking}. "
+            f"To proceed, {advice}."
         )
     if store.active_runs(str(info.path)):
         raise _fail(
@@ -411,6 +433,59 @@ async def duet_cancel(run_id: UUID) -> RunStatus:
         ),
     )
     return updated.to_status()
+
+
+def cancel(run_id: str, config_path: Path | None = None) -> int:
+    """Operator-facing ``agent-duet cancel``: clear a run without a client session.
+
+    A run parked at ``AWAITING_FINALIZE`` has no live worker and is never reaped -- it
+    is waiting for a person. It still counts as active, so with the default
+    ``max_parallel_global = 1`` it blocks every new run, and until now the only way to
+    release it was an interactive session that still had the MCP tools wired up.
+    """
+    try:
+        config = load_config(config_path)
+        ensure_state_dirs(config)
+        store = StateStore(config.db_path)
+    except ConfigError as exc:
+        print(f"config error: {exc}", file=sys.stderr)
+        return 1
+
+    matches = [r for r in store.all_runs() if str(r.run_id).startswith(run_id)]
+    if not matches:
+        print(f"no run matches {run_id!r}", file=sys.stderr)
+        return 1
+    if len(matches) > 1:
+        print(f"{run_id!r} matches {len(matches)} runs; use more characters", file=sys.stderr)
+        for record in matches:
+            print(f"  {record.run_id}  {record.phase.value}", file=sys.stderr)
+        return 1
+
+    record = matches[0]
+    if record.terminal:
+        print(f"{record.run_id} is already {record.phase.value}; nothing to cancel")
+        return 0
+
+    store.request_cancel(record.run_id)
+    outcomes = _reap_run_processes(store, record)
+    leftover = _surviving_processes(store.get(record.run_id))
+    summary = "Run cancelled. Nothing was committed, pushed, or deployed."
+    if leftover:
+        summary += f" WARNING: {len(leftover)} process(es) could not be confirmed gone."
+    store.transition(
+        record.run_id,
+        Phase.CANCELLED,
+        reason=f"cancelled from the command line: {'; '.join(outcomes) or 'no live process'}",
+        summary=summary,
+        error=f"cleanup incomplete: {', '.join(leftover)}" if leftover else None,
+    )
+    print(f"cancelled {record.run_id} (was {record.phase.value})")
+    for line in outcomes:
+        print(f"  {line}")
+    if leftover:
+        print(f"  WARNING: still running: {', '.join(leftover)}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def _reap_run_processes(store: StateStore, record: RunRecord) -> list[str]:
@@ -1139,6 +1214,14 @@ def doctor(config_path: Path | None = None) -> int:
         )
         if not exists:
             problems += 1
+        if not repo.validation_commands:
+            # Not a failure -- a repo may genuinely have no suite -- but it must be
+            # stated. With no command, FINAL_VALIDATING has nothing to run, so the
+            # only thing standing behind the work is what the models claim about it.
+            lines.append(
+                "    WARNING: no validation_commands, so nothing independent checks "
+                "this repository's runs. Both agents' claims go unverified."
+            )
     lines.append(
         f"deployment: {'enabled' if config.deployment.enabled else 'disabled'}, "
         f"{len(config.deployment.profiles)} profile(s)"

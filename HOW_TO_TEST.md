@@ -7,7 +7,7 @@ You need three commands. No files to edit.
 ## The whole thing
 
 ```bash
-cd Claude_Code_Codex_MCP_Coordinator     # the folder you cloned
+cd Claude_Code_Codex_MCP_Coordinator/     # the folder you cloned
 ./setup.sh
 ```
 
@@ -110,7 +110,7 @@ output to me as-is.
 | Fails right away at `CLAUDE_IMPLEMENTING` | run `claude` on its own once and sign in |
 | Fails at `CODEX_REVIEWING` | run `codex` on its own once and sign in |
 | `not below an allowed_repo_roots entry` | run `./setup.sh add-repo <the project>` |
-| `a run is already active for ...` | finish or cancel the previous run first |
+| `already active ... max_parallel_global is 1` | it names the run; `agent-duet cancel <run-id>` frees the slot |
 | Refuses to finalize | read the reason it gives; something changed after the tests ran |
 
 ---

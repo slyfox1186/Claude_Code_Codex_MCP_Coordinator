@@ -61,6 +61,11 @@ def build_parser() -> argparse.ArgumentParser:
     logs_cmd.add_argument("--full", action="store_true", help="print whole files, no tailing")
 
     sub.add_parser("runs", help="list every recorded run, newest first")
+
+    cancel_cmd = sub.add_parser(
+        "cancel", help="cancel an unfinished run and free its slot (accepts an id prefix)"
+    )
+    cancel_cmd.add_argument("run_id")
     return parser
 
 
@@ -105,6 +110,11 @@ def main(argv: list[str] | None = None) -> int:
         from .diagnostics import list_runs
 
         return list_runs(config_path)
+
+    if command == "cancel":
+        from .server import cancel
+
+        return cancel(args.run_id, config_path)
 
     raise SystemExit(f"unknown command: {command}")
 

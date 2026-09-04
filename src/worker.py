@@ -676,14 +676,31 @@ class Worker:
         )
         logger.debug("run %s: changed paths: %s", self.run_id, owned)
 
+        # An empty result set means no command was configured, not that checks passed.
+        # Saying "every configured validation passed" there is true but reads as a
+        # clean bill of health, so state the absence outright.
+        unvalidated = not results
+        summary = (
+            "Reconciliation complete, but this repository has NO configured "
+            "validation_commands, so nothing independent verified the work -- only "
+            "the agents' own claims stand behind it. Nothing has been committed, "
+            "pushed, or deployed."
+            if unvalidated
+            else (
+                f"Reconciliation complete and all {len(results)} configured "
+                "validation(s) passed. Nothing has been committed, pushed, or deployed."
+            )
+        )
+
         self.store.transition(
             self.run_id,
             Phase.AWAITING_FINALIZE,
-            reason="all phases and configured validations passed",
-            summary=(
-                "Reconciliation complete and every configured validation passed. "
-                "Nothing has been committed, pushed, or deployed."
+            reason=(
+                "all phases passed; NO validation commands are configured"
+                if unvalidated
+                else "all phases and configured validations passed"
             ),
+            summary=summary,
             current_sha=info.head_sha,
             validated_diff_sha256=diff_sha,
             validated_tree_sha=tree_sha,
@@ -697,6 +714,7 @@ class Worker:
                 "validated_tree_sha": tree_sha,
                 "proposed_commit_message": proposed_message,
                 "validations": [item.model_dump() for item in results],
+                "unvalidated": unvalidated,
                 "changed_path_count": len(owned),
                 "validation_produced_paths": produced,
                 "run_dir": str(run_dir),

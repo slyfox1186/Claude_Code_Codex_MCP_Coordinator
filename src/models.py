@@ -182,6 +182,10 @@ class Evidence(BaseModel):
     codex_readonly_verified: bool | None = None
     codex_mutations_detected: list[str] = Field(default_factory=list)
     validations: list[ValidationResult] = Field(default_factory=list)
+    #: True when the repository has no configured validation_commands, so nothing
+    #: independent checked this run. Reported rather than implied by an empty
+    #: ``validations`` list, which reads too easily as "all checks passed".
+    unvalidated: bool = False
     proposed_commit_message: str | None = None
     commit_safety_warnings: list[str] = Field(default_factory=list)
     deployment: DeploymentEvidence | None = None

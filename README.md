@@ -164,9 +164,17 @@ it; they coordinate through git remotes, not through this database.
 
 ```bash
 agent-duet doctor              # health report
+agent-duet runs                # every run, newest first
+agent-duet logs [run-id]       # everything about one run (default: the most recent)
+agent-duet cancel <run-id>     # clear an unfinished run and free its slot
 agent-duet gc --older-than 30  # dry run: list old terminal-run artifacts
 agent-duet gc --older-than 30 --apply
 ```
+
+`cancel` accepts an id prefix. It exists because a run parked at `AWAITING_FINALIZE`
+has no live worker and is never reaped -- it is waiting for a person -- yet it still
+counts as active, so with the default `max_parallel_global = 1` it blocks every new
+run until someone finalizes or cancels it.
 
 `gc` only ever touches directories inside the state tree, and only for terminal runs.
 

@@ -17,16 +17,18 @@ from pathlib import Path
 
 import pytest
 from agent_duet.artifacts import CRITIQUE_FILENAME, atomic_write_text
-from agent_duet.config import ConfigError, load_config
+from agent_duet.config import ConfigError, ensure_state_dirs, load_config
 from agent_duet.git_guard import changed_paths, combined_diff_sha256, owned_tree_sha
 from agent_duet.models import Evidence, Phase, StartRequest
 from agent_duet.process_guard import process_alive, terminate_process_group
 from agent_duet.server import (
+    ToolError,
     _reap_dead_runs,
     _status_with_liveness,
     _worker_vanished,
     create_run,
 )
+from agent_duet.state import StateStore
 from agent_duet.worker import Worker
 
 from helpers import git
@@ -489,3 +491,133 @@ def test_losing_the_repository_mid_run_commits_nothing(config, store, repo, fake
     assert final.error
     assert final.validated_tree_sha is None, "nothing may be marked validated"
     assert final.active_child_pid is None
+
+
+# --- an anticipated refusal must reach the caller, not just the server log ------
+
+
+def test_a_refusal_reaches_the_caller_with_its_reason_intact(config, store, repo):
+    """Every refusal here is only useful if the model can read *why*.
+
+    ``agent_duet.server.ToolError`` once subclassed ``RuntimeError``. The SDK's tool
+    layer treats only its own ``ToolError`` as anticipated; anything else is a crash,
+    so the caller received a bare "Error executing tool duet_start" while the reason
+    stayed in the server log. Observed live: a session was told nothing at all when a
+    prior run held the only slot.
+    """
+    from mcp.server.mcpserver.exceptions import ToolError as McpToolError
+
+    assert issubclass(ToolError, McpToolError), (
+        "ToolError must subclass the SDK's ToolError or its message is withheld"
+    )
+
+    start(config, store, repo)  # occupies the single slot
+    with pytest.raises(ToolError) as caught:
+        start(config, store, repo, task="a second, blocked task")
+
+    message = str(caught.value)
+    assert "already active" in message
+    assert str(repo) in message, "the refusal must name the repository holding the slot"
+
+
+async def test_the_sdk_tool_layer_forwards_the_refusal_text(config, store, repo):
+    """Prove it end to end through the SDK, not just by inheritance."""
+    from mcp.server import MCPServer
+    from mcp.server.mcpserver.exceptions import ToolError as McpToolError
+
+    server = MCPServer("test")
+
+    @server.tool()
+    def refusing_tool() -> str:
+        raise ToolError("a run is already active for /some/repo; cancel it first")
+
+    with pytest.raises(McpToolError) as caught:
+        await server.call_tool("refusing_tool", {})
+
+    assert "a run is already active for /some/repo" in str(caught.value)
+
+
+def test_a_run_awaiting_finalize_says_so_when_it_blocks_a_start(config, store, repo):
+    """The blocking run is usually one the operator forgot to finalize.
+
+    Telling them "wait for it to finish" is wrong in that case: it never will.
+    """
+    record = start(config, store, repo)
+    for phase in (
+        Phase.CLAUDE_IMPLEMENTING,
+        Phase.HANDOFF_VALIDATING,
+        Phase.CODEX_REVIEWING,
+        Phase.REVIEW_INTEGRITY_CHECK,
+        Phase.CLAUDE_RECONCILING,
+        Phase.FINAL_VALIDATING,
+        Phase.AWAITING_FINALIZE,
+    ):
+        store.transition(record.run_id, phase, reason="driven by the test")
+
+    with pytest.raises(ToolError) as caught:
+        start(config, store, repo, task="a second, blocked task")
+
+    message = str(caught.value)
+    assert str(record.run_id) in message
+    assert "duet_finalize" in message and "duet_cancel" in message
+
+
+# --- a run nobody checked must say so ------------------------------------------
+
+
+def test_a_repo_with_no_validation_commands_is_reported_as_unvalidated(
+    config, store, repo
+):
+    """"All configured validations passed" reads as a pass when none were configured.
+
+    Observed live: a PowerShell repository was registered with
+    ``validation_commands = []`` (nothing the detector recognises), and the run would
+    have reached AWAITING_FINALIZE announcing that validation succeeded. Nothing had
+    run. The only thing behind the work was what the two models said about it.
+    """
+    record = create_run(config, store, StartRequest(
+        repo_path=repo,
+        task="Add a pure function named add(a, b) and tests.",
+        acceptance_criteria=["existing tests still pass"],
+    ))
+    asyncio.run(Worker(config=config, store=store, run_id=record.run_id).execute())
+    final = store.get(record.run_id)
+
+    assert final.phase is Phase.AWAITING_FINALIZE, final.error
+    assert final.evidence["unvalidated"] is True
+    assert final.evidence["validations"] == []
+    assert "NO configured validation_commands" in final.summary
+    assert "only the agents' own claims" in final.summary
+
+    # And it must survive the public projection, not just sit in the raw row.
+    assert Evidence.from_record(final.evidence).unvalidated is True
+
+
+def test_a_repo_with_validation_commands_is_not_flagged_unvalidated(
+    config_file, work_root, repo
+):
+    """The flag must be about absence of commands, not about them being cheap."""
+    text = config_file.read_text().replace(
+        "validation_commands = []",
+        'validation_commands = [["/bin/true"]]',
+    )
+    config_file.write_text(text)
+    config_file.chmod(0o600)
+    reloaded = load_config(config_file)
+    ensure_state_dirs(reloaded)
+    reloaded_store = StateStore(reloaded.db_path)
+
+    record = create_run(reloaded, reloaded_store, StartRequest(
+        repo_path=repo,
+        task="Add a pure function named add(a, b) and tests.",
+        acceptance_criteria=["existing tests still pass"],
+    ))
+    asyncio.run(
+        Worker(config=reloaded, store=reloaded_store, run_id=record.run_id).execute()
+    )
+    final = reloaded_store.get(record.run_id)
+
+    assert final.phase is Phase.AWAITING_FINALIZE, final.error
+    assert final.evidence["unvalidated"] is False
+    assert len(final.evidence["validations"]) == 1
+    assert "all 1 configured validation(s) passed" in final.summary
