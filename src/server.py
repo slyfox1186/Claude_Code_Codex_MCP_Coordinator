@@ -238,34 +238,53 @@ async def duet_start(
     repo_path: str,
     task: str,
     acceptance_criteria: list[str] | None = None,
-    delivery_mode: Literal["review_branch", "direct_branch"] = "review_branch",
+    delivery_mode: Literal["review_branch", "direct_branch"] | None = None,
     expected_base_ref: str | None = None,
     idempotency_key: str | None = None,
 ) -> RunStatus:
     """Start one Claude->Codex->Claude run and return immediately with its run_id.
 
-    Side effects: creates a durable run record, a private worktree and branch (in
+    delivery_mode decides where the work ends up, so pick it deliberately:
+
+    - ``direct_branch`` (the default) works on the branch the repository is already on,
+      so finalize commits there -- to ``main`` if that is where the user is. This is what
+      "make this change" normally means. It requires a clean tree and an attached HEAD,
+      because the run edits the checkout in place.
+    - ``review_branch`` parks the work on a new ``agent-duet/<id>`` branch that somebody
+      then has to merge, and tolerates a dirty tree because it works in its own private
+      worktree. Ask for it when the user wants to review before it touches their branch.
+
+    Omit the argument to use the machine's ``git.default_delivery_mode``.
+
+    Side effects: creates a durable run record, a branch and private worktree (in
     review_branch mode), and a detached worker process that will modify files in that
     worktree. It NEVER commits, pushes, deploys, changes remotes, or rewrites history;
     publishing is duet_finalize only. Call this once per task, keep the run_id, and poll
     with duet_wait.
     """
     refuse_if_child("duet_start")
+    config, store = _runtime()
+    # Unset means "whatever this machine is configured for". Resolving it here rather
+    # than in the signature is what makes git.default_delivery_mode do anything at all:
+    # a literal default in the signature can never be overridden by config, so the
+    # setting sat in config.example.toml looking functional while being ignored.
+    resolved_mode = delivery_mode or config.git.default_delivery_mode
     logger.info(
-        "duet_start called: repo=%s delivery_mode=%s criteria=%d task=%dB idempotency=%s",
+        "duet_start called: repo=%s delivery_mode=%s (caller=%s) criteria=%d task=%dB "
+        "idempotency=%s",
         repo_path,
-        delivery_mode,
+        resolved_mode,
+        delivery_mode or "unset",
         len(acceptance_criteria or []),
         len(task),
         idempotency_key,
     )
-    config, store = _runtime()
 
     request = StartRequest(
         repo_path=Path(repo_path),
         task=task,
         acceptance_criteria=acceptance_criteria or [],
-        delivery_mode=delivery_mode,
+        delivery_mode=resolved_mode,
         expected_base_ref=expected_base_ref,
         idempotency_key=idempotency_key,
     )

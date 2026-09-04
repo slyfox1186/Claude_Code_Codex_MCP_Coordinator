@@ -30,6 +30,13 @@ def runtime(config, store):
     RUNTIME.reset()
 
 
+def remote_sha(bare_remote, branch, repo):
+    """The SHA the remote has for ``branch``, or None if it has no such branch."""
+    listed = git("ls-remote", str(bare_remote), f"refs/heads/{branch}", cwd=repo)
+    out = listed.stdout.strip()
+    return out.split()[0] if out else None
+
+
 def ready_run(config, store, repo, **kwargs):
     """Drive a full run to AWAITING_FINALIZE and return its record."""
     request = StartRequest(
@@ -124,11 +131,11 @@ def test_a_change_to_a_run_owned_file_still_blocks_the_commit(
 ):
     """Scoping the fingerprint must not weaken the gate on the run's own files."""
     record = ready_run(config, store, repo)
+    before = remote_sha(bare_remote, record.branch, repo)
     (Path(record.worktree) / "impl.py").write_text("def add(a, b):\n    return a - b\n")
     with pytest.raises(ToolError, match="changed after validation"):
         finalize(record, bare_remote)
-    listed = git("ls-remote", str(bare_remote), f"refs/heads/{record.branch}", cwd=repo)
-    assert listed.stdout.strip() == ""
+    assert remote_sha(bare_remote, record.branch, repo) == before
 
 
 def test_only_run_owned_paths_are_ever_staged(
@@ -156,12 +163,12 @@ def test_finalize_without_push_commits_locally_only(
     runtime, config, store, repo, bare_remote, fake_log_dir
 ):
     record = ready_run(config, store, repo)
+    before = remote_sha(bare_remote, record.branch, repo)
     result = finalize(record, bare_remote, push=False)
     assert result.phase is Phase.COMPLETE
     assert result.pushed is False
     assert result.remote_commit_sha is None
-    listed = git("ls-remote", str(bare_remote), f"refs/heads/{record.branch}", cwd=repo)
-    assert listed.stdout.strip() == "", "nothing should have been pushed"
+    assert remote_sha(bare_remote, record.branch, repo) == before, "nothing was pushed"
 
 
 def test_deployment_is_reported_not_checked_without_a_verifier(
@@ -195,7 +202,7 @@ def test_finalize_refuses_the_wrong_branch(
         asyncio.run(
             duet_finalize(
                 run_id=record.run_id,
-                expected_branch="main",
+                expected_branch="not-the-runs-branch",
                 expected_remote_url=str(bare_remote),
                 commit_message="wrong branch",
             )
@@ -283,22 +290,22 @@ def test_finalize_refuses_a_credential_in_the_commit_set(
     record = ready_run(config, store, repo)
     # The message has to name the rule and the line, because the operator's next move is
     # to open that line and decide whether it is a real secret or a variable named badly.
+    before = remote_sha(bare_remote, record.branch, repo)
     with pytest.raises(ToolError, match=r"line \d+ looks like"):
         finalize(record, bare_remote)
-    listed = git("ls-remote", str(bare_remote), f"refs/heads/{record.branch}", cwd=repo)
-    assert listed.stdout.strip() == ""
+    assert remote_sha(bare_remote, record.branch, repo) == before
 
 
 def test_finalize_refuses_a_leftover_artifact_in_the_worktree(
     runtime, config, store, repo, bare_remote, fake_log_dir
 ):
     record = ready_run(config, store, repo)
+    before = remote_sha(bare_remote, record.branch, repo)
     (Path(record.worktree) / CRITIQUE_FILENAME).write_text("snuck back in\n")
     # Either gate is acceptable; what matters is that it never reaches a commit.
     with pytest.raises(ToolError, match=r"still present|changed after validation"):
         finalize(record, bare_remote)
-    listed = git("ls-remote", str(bare_remote), f"refs/heads/{record.branch}", cwd=repo)
-    assert listed.stdout.strip() == ""
+    assert remote_sha(bare_remote, record.branch, repo) == before
 
 
 def test_a_refused_finalize_leaves_the_run_finalizable(

@@ -112,7 +112,7 @@ class StartRequest(BaseModel):
     repo_path: Path
     task: str = Field(min_length=1, max_length=50_000)
     acceptance_criteria: list[str] = Field(default_factory=list, max_length=100)
-    delivery_mode: Literal["review_branch", "direct_branch"] = "review_branch"
+    delivery_mode: Literal["review_branch", "direct_branch"] = "direct_branch"
     expected_base_ref: str | None = Field(default=None, max_length=200)
     idempotency_key: str | None = Field(default=None, max_length=200)
 

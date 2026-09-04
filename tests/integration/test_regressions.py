@@ -478,7 +478,7 @@ def test_losing_the_repository_mid_run_commits_nothing(config, store, repo, fake
     """The whole point: an environment fault fails the run, it never half-publishes."""
     import shutil
 
-    record = start(config, store, repo)
+    record = start(config, store, repo, delivery_mode="review_branch")
     worktree = config.worktrees_dir / f"{repo.name}-{record.run_id[:8]}" / record.run_id[:8]
     from agent_duet.git_guard import add_worktree, inspect_repo
 
@@ -715,7 +715,7 @@ def test_gc_unregisters_the_worktree_instead_of_orphaning_it(config, store, repo
     from agent_duet.git_guard import add_worktree, run_git
     from agent_duet.server import gc
 
-    record = start(config, store, repo)
+    record = start(config, store, repo, delivery_mode="review_branch")
     worktree = config.worktrees_dir / f"{repo.name}-{record.run_id[:8]}" / record.run_id[:8]
     add_worktree(repo, worktree, record.branch, record.base_sha)
     store.update(record.run_id, worktree=str(worktree))
@@ -726,3 +726,55 @@ def test_gc_unregisters_the_worktree_instead_of_orphaning_it(config, store, repo
     capsys.readouterr()
     assert not worktree.exists()
     assert str(worktree) not in run_git(["worktree", "list"], cwd=repo).stdout
+
+
+# ---------------------------------------------------------------------------
+# git.default_delivery_mode was documented but never read
+# ---------------------------------------------------------------------------
+
+
+def test_the_configured_delivery_mode_is_actually_used(config, store, repo):
+    """Setting git.default_delivery_mode has to change what a run does.
+
+    It did not. duet_start declared the default in its own signature, which no config
+    can override, so the key sat in config.example.toml looking functional while being
+    ignored -- the worst kind of setting, because it fails silently and in the direction
+    of "my configuration is not being applied and I cannot tell why".
+    """
+    from agent_duet.server import RUNTIME, duet_start
+
+    configured = config.model_copy(
+        update={"git": config.git.model_copy(update={"default_delivery_mode": "review_branch"})}
+    )
+    RUNTIME._config, RUNTIME._store = configured, store
+    try:
+        status = asyncio.run(duet_start(repo_path=str(repo), task="anything at all"))
+    finally:
+        RUNTIME.reset()
+
+    assert configured.git.default_delivery_mode == "review_branch"
+    assert status.branch.startswith("agent-duet/"), (
+        "duet_start ignored git.default_delivery_mode and used its own default"
+    )
+    assert store.get(status.run_id).delivery_mode == "review_branch"
+
+
+def test_an_explicit_delivery_mode_still_beats_the_configured_one(config, store, repo):
+    """Config sets the default; an explicit argument is not a suggestion."""
+    from agent_duet.server import RUNTIME, duet_start
+
+    configured = config.model_copy(
+        update={"git": config.git.model_copy(update={"default_delivery_mode": "review_branch"})}
+    )
+    RUNTIME._config, RUNTIME._store = configured, store
+    try:
+        status = asyncio.run(
+            duet_start(
+                repo_path=str(repo), task="anything at all", delivery_mode="direct_branch"
+            )
+        )
+    finally:
+        RUNTIME.reset()
+
+    assert status.branch == "main"
+    assert store.get(status.run_id).delivery_mode == "direct_branch"

@@ -126,14 +126,18 @@ agent-duet logs <run-id>                     # everything about one run
 
 Three things worth confirming the first time:
 
-**1. Your project was never touched while it worked.**
+**1. Nothing was committed or pushed behind your back.**
 
 ```bash
 git -C ~/duet-demo/smoke log --oneline
-git -C ~/duet-demo/smoke status --short
 ```
 
-One commit, clean tree. All the work happened in a separate private copy.
+Still one commit. The run edits files, but only `duet_finalize` commits, and only after
+you say yes.
+
+If you want the run kept out of your checkout entirely, ask for a review branch when you
+start it — then your working copy stays untouched and the work lands on its own branch
+for you to merge.
 
 **2. The run survives you closing the session.** Close Claude Code completely, open a
 new session anywhere, and ask:

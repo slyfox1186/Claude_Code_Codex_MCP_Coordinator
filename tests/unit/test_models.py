@@ -38,9 +38,14 @@ def test_start_request_caps_criteria_count():
         StartRequest(repo_path="/tmp/x", task="t", acceptance_criteria=["x"] * 101)
 
 
-def test_start_request_defaults_to_review_branch():
+def test_start_request_defaults_to_the_branch_the_user_is_already_on():
+    """A run nobody configured lands on the caller's branch, not a side branch.
+
+    Defaulting the other way meant a run could finish, leave the user's branch untouched,
+    and hand them an `agent-duet/<id>` branch plus a pull request they never asked for.
+    """
     request = StartRequest(repo_path="/tmp/x", task="t")
-    assert request.delivery_mode == "review_branch"
+    assert request.delivery_mode == "direct_branch"
 
 
 def test_finalize_request_rejects_bad_branch():

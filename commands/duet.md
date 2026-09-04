@@ -26,7 +26,7 @@ You need four things. Work out which you already have, then ask only for the res
 | The task | the argument above, or the conversation so far |
 | The repository | the current working directory's repository root |
 | Acceptance criteria | inferred from the task, then confirmed |
-| Delivery mode | default `review_branch`; only ask if the user raised it |
+| Delivery mode | leave it alone unless the user asked for a review branch |
 
 **If the argument above is empty**, do not guess and do not start. Two cases:
 
@@ -50,6 +50,13 @@ decide", pick the most defensible option, state the assumption you are making, a
 Restate the final task and acceptance criteria in one short block before calling
 `duet_start`, so what the run received is on the record.
 
+**Do not pass `delivery_mode` unless the user asked for that behaviour.** Omitted, the
+run lands its commit on the branch they are already on, which is what asking for a change
+normally means. Pass `review_branch` only when they say they want to review it on a
+separate branch first, or when the working tree is dirty and they will not clean it —
+that mode is the one that creates `agent-duet/<id>`, and a branch nobody asked for reads
+as the tool going behind their back.
+
 ## What to do
 
 1. **Determine the repository.** Use the current working directory's repository root. It
@@ -72,7 +79,9 @@ Restate the final task and acceptance criteria in one short block before calling
 
 5. **At `AWAITING_FINALIZE`, stop and report.** Summarize, from the returned evidence
    only:
-   - the branch, base commit, and the exact files the run changed;
+   - the branch the commit will land on, the base commit, and the exact files the run
+     changed. If that branch is not the one the user is on, say so plainly — it means
+     the run used `review_branch` and the work will need merging afterwards;
    - each configured validation command and whether it passed;
    - whether the reviewer was verified as non-mutating
      (`codex_readonly_verified`), and any mutations it did make;

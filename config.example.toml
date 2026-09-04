@@ -68,7 +68,13 @@ extra_args = []
 timeout_seconds = 7200
 
 [git]
-default_delivery_mode = "review_branch"
+# Where a run's work lands when the caller does not say.
+#   "direct_branch" -- commit on the branch you are already on (main, usually).
+#                      Needs a clean tree and an attached HEAD; the run edits the
+#                      checkout in place.
+#   "review_branch" -- park it on branch_prefix + the run id for someone to merge.
+#                      Works in a private worktree, so a dirty tree is fine.
+default_delivery_mode = "direct_branch"
 branch_prefix = "agent-duet/"
 allowed_remote_names = ["origin"]
 

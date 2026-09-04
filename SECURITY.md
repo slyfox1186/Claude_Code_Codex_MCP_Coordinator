@@ -72,9 +72,10 @@ These are structural, not advisory, and no configuration turns them off.
    *common* directory — not the worktree path — so two MCP processes, or Claude and
    Codex simultaneously, cannot run concurrent writers against one repository.
 
-8. **A run owns a clean tree.** `direct_branch` mode refuses a dirty working tree and a
-   detached HEAD. `review_branch` mode, the default, works in a private worktree on its
-   own `agent-duet/<short-run-id>` branch, so pre-existing changes are never swept in.
+8. **A run owns a clean tree.** `direct_branch` mode, the default, edits the checkout in
+   place, so it refuses a dirty working tree and a detached HEAD rather than mixing its
+   work with yours. `review_branch` mode works in a private worktree on its own
+   `agent-duet/<short-run-id>` branch, so pre-existing changes are never swept in.
 
 9. **Evidence beats claims.** Phase gates are process exit codes, parsed structured
    output, git object ids, porcelain-v2 status, diff hashes, and validation exit codes.

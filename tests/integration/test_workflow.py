@@ -51,9 +51,23 @@ def test_full_run_reaches_awaiting_finalize(config, store, repo, fake_log_dir):
     final = store.get(record.run_id)
     assert final.phase is Phase.AWAITING_FINALIZE, final.error
     assert final.terminal is False
-    assert final.branch.startswith("agent-duet/")
+    # The default keeps the work where the user already is. A run that quietly moved it
+    # to a side branch left them looking at an unchanged branch and a pull request they
+    # never asked for.
+    assert final.branch == "main"
     assert final.validated_diff_sha256
     assert sorted(final.owned_paths) == ["impl.py", "test_impl.py"]
+
+
+def test_a_review_branch_run_gets_its_own_branch(config, store, repo, fake_log_dir):
+    """The side branch is still available -- it is opt-in rather than the default."""
+    record = start(config, store, repo, delivery_mode="review_branch")
+    run_worker(config, store, record.run_id)
+
+    final = store.get(record.run_id)
+    assert final.phase is Phase.AWAITING_FINALIZE, final.error
+    assert final.branch.startswith("agent-duet/")
+    assert final.branch != "main"
 
 
 def test_every_phase_is_recorded_in_order(config, store, repo, fake_log_dir):
@@ -73,8 +87,14 @@ def test_every_phase_is_recorded_in_order(config, store, repo, fake_log_dir):
 
 
 def test_the_original_repository_is_untouched(config, store, repo, fake_log_dir):
+    """review_branch keeps the run out of the checkout entirely.
+
+    This is the property that mode exists for, so it is asserted against that mode.
+    direct_branch deliberately edits the checkout in place -- that is what "commit on
+    the branch I am on" means -- and is covered separately.
+    """
     before = git("rev-parse", "HEAD", cwd=repo).stdout.strip()
-    record = start(config, store, repo)
+    record = start(config, store, repo, delivery_mode="review_branch")
     run_worker(config, store, record.run_id)
     assert git("rev-parse", "HEAD", cwd=repo).stdout.strip() == before
     assert git("status", "--porcelain", cwd=repo).stdout.strip() == ""
@@ -449,7 +469,7 @@ def test_review_branch_tolerates_a_dirty_tree_and_ignores_those_changes(
     config, store, repo, fake_log_dir
 ):
     (repo / "unrelated.txt").write_text("not part of the run\n")
-    record = start(config, store, repo)
+    record = start(config, store, repo, delivery_mode="review_branch")
     run_worker(config, store, record.run_id)
     final = store.get(record.run_id)
     assert final.phase is Phase.AWAITING_FINALIZE, final.error
