@@ -33,8 +33,8 @@ virtualenv: the package installs into the Python interpreter you name below.
 ## Install
 
 ```bash
-git clone <your private repo url> "$HOME/src/agent-duet"
-cd "$HOME/src/agent-duet"
+git clone <your private repo url>
+cd Claude_Code_Codex_MCP_Coordinator
 ./setup.sh
 ```
 

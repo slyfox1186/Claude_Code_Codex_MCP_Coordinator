@@ -64,10 +64,13 @@ Export `PY` for the rest of this document. Every later command uses it.
 
 ## 2. Clone
 
+Clone it wherever you keep code. These instructions do not assume a location: they
+record the one you chose in `$DUET_REPO` and use that from then on.
+
 ```bash
-git clone https://github.com/slyfox1186/Claude_Code_Codex_MCP_Coordinator.git \
-  "$HOME/src/agent-duet"
-cd "$HOME/src/agent-duet"
+git clone https://github.com/slyfox1186/Claude_Code_Codex_MCP_Coordinator.git
+cd Claude_Code_Codex_MCP_Coordinator
+export DUET_REPO="$PWD"
 git log --oneline -1
 ```
 
@@ -100,7 +103,7 @@ package-dir = { "agent_duet" = "src" }
 Do not "fix" this by creating a nested package directory. It is the intended layout.
 
 ```bash
-cd "$HOME/src/agent-duet"
+cd "$DUET_REPO"
 "$PY" -m pip install -r requirements-lock.txt
 "$PY" -m pip install -e ".[dev]"
 ```
@@ -125,7 +128,7 @@ There is no virtualenv and no `.venv/`. If you find yourself creating one, stop.
 ## 4. Run the test suite
 
 ```bash
-cd "$HOME/src/agent-duet"
+cd "$DUET_REPO"
 "$PY" -m pytest
 "$PY" -m ruff check .
 "$PY" -m mypy
@@ -146,7 +149,7 @@ suite means the install is not usable, not that the tests are wrong.
 ## 5. Configure and register — one command
 
 ```bash
-cd "$HOME/src/agent-duet"
+cd "$DUET_REPO"
 ./setup.sh install
 ```
 
@@ -207,7 +210,7 @@ test. Edit them by hand whenever the detected default is not what you want.
 Do **not** make the first run against anything you care about.
 
 ```bash
-cd "$HOME/src/agent-duet"
+cd "$DUET_REPO"
 ./setup.sh demo
 ```
 

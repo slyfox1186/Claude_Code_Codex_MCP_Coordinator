@@ -7,7 +7,7 @@ You need three commands. No files to edit.
 ## The whole thing
 
 ```bash
-cd ~/src/agent-duet          # wherever you cloned it
+cd Claude_Code_Codex_MCP_Coordinator     # the folder you cloned
 ./setup.sh
 ```
 
