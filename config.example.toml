@@ -1,0 +1,93 @@
+# agent-duet configuration.
+#
+# Copy to ~/.config/agent-duet/config.toml, replace every REPLACE_ME, then:
+#   chmod 700 ~/.config/agent-duet ~/.local/state/agent-duet
+#   chmod 600 ~/.config/agent-duet/config.toml
+#
+# Unknown keys are a hard error, so a typo fails loudly instead of being ignored.
+# Nothing here may be supplied by a model or read from a repository under test.
+
+# Runs are only allowed strictly below one of these roots. The root itself, the
+# filesystem root, and your home directory are always refused.
+allowed_repo_roots = ["/home/REPLACE_ME/work"]
+
+state_dir = "/home/REPLACE_ME/.local/state/agent-duet"
+
+max_parallel_global = 1
+phase_timeout_seconds = 7200
+wait_max_seconds = 300
+log_max_bytes_per_stream = 25000000
+
+# "inherit" gives child agents your full environment, so they can use every credential
+# and tool you can. "minimal" restricts them to a locale/git/ssh allowlist.
+child_env_mode = "inherit"
+
+[claude]
+# Absolute path from `command -v claude`.
+executable = "/home/REPLACE_ME/.local/bin/claude"
+
+# Child agents run unsandboxed with full machine access by design; see SECURITY.md.
+# Set dangerously_skip_permissions = false to fall back to permission_mode instead.
+dangerously_skip_permissions = true
+permission_mode = "bypassPermissions"
+
+# Empty means the full built-in toolset. Add exact patterns here only if you want to
+# narrow it, e.g. ["Read", "Edit", "Write", "Glob", "Grep", "Bash(git status *)"].
+allowed_tools = []
+
+# Always enforced, whatever you put here: the child can never reach agent_duet itself.
+disallowed_tools = ["mcp__*"]
+
+# Optional. "" means the CLI default.
+model = ""
+
+# 0 disables the cap. Claude Code 2.1.x has no --max-turns; this is the equivalent brake.
+max_budget_usd = 0.0
+
+extra_dirs = []
+extra_args = []
+timeout_seconds = 7200
+
+[codex]
+# Absolute path from `command -v codex`.
+executable = "/home/REPLACE_ME/.local/bin/codex"
+
+# "bypass" runs the reviewer with no OS sandbox (full machine access).
+# "read-only" is the strict alternative and makes write_policy = "fail" meaningful.
+sandbox_mode = "bypass"
+
+ignore_user_config = true
+ephemeral = true
+model = ""
+
+# "warn" records any repository mutation the reviewer caused as evidence and passes a
+# note to the reconciliation phase. "fail" aborts the run instead.
+write_policy = "warn"
+
+extra_args = []
+timeout_seconds = 7200
+
+[git]
+default_delivery_mode = "review_branch"
+branch_prefix = "agent-duet/"
+allowed_remote_names = ["origin"]
+
+[deployment]
+# Deployment is never assumed. With no verifier configured, finalize reports NOT_CHECKED.
+enabled = false
+
+# [deployment.profiles.example-production]
+# command = ["/home/REPLACE_ME/bin/verify-example-deployment"]
+# expected_remote_url = "git@github.com:ORG/example.git"
+# timeout_seconds = 900
+
+# Per-repository settings, keyed by canonical path. Validation command vectors are
+# TOML arrays, never shell strings, and are the coordinator's authoritative check.
+# [[repositories]]
+# path = "/home/REPLACE_ME/work/example"
+# validation_commands = [
+#   ["uv", "run", "pytest", "-q"],
+#   ["npm", "test", "--", "--runInBand"],
+# ]
+# validation_timeout_seconds = 3600
+# deployment_profile = "example-production"

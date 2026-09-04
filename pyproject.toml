@@ -1,0 +1,64 @@
+[project]
+name = "agent-duet"
+version = "1.0.0"
+description = "Local stdio MCP coordinator for a Claude -> Codex -> Claude implement/review/reconcile workflow."
+readme = "README.md"
+requires-python = ">=3.13"
+license = { text = "MIT" }
+authors = [{ name = "Jeff" }]
+dependencies = [
+    "mcp==2.1.1",
+    "pydantic>=2.13,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.9",
+    "mypy>=1.14",
+]
+
+[project.scripts]
+agent-duet = "agent_duet.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# The modules live directly in src/. The package they are imported as is agent_duet,
+# so src/ is mapped onto that name rather than being a directory called agent_duet.
+packages = ["agent_duet"]
+package-dir = { "agent_duet" = "src" }
+
+[tool.setuptools.package-data]
+agent_duet = ["prompts/*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "S", "RUF"]
+ignore = ["S101", "S603", "S607", "B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "E501"]
+"tests/fixtures/bin/*" = ["ALL"]
+
+[tool.mypy]
+python_version = "3.13"
+# The modules live in src/ and are installed under the name agent_duet. For static
+# analysis the directory name is what matters, so point mypy at the directory.
+files = ["src"]
+strict = true
+warn_unused_ignores = false
+disallow_untyped_decorators = false

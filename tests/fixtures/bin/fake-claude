@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+"""A deterministic stand-in for the Claude Code CLI.
+
+Behaviour is chosen with FAKE_CLAUDE_BEHAVIOR. Every invocation records its argv, the
+prompt it received on stdin, and whether AGENT_DUET_CHILD was set, so tests can assert
+on the coordinator's isolation flags without a network call.
+"""
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+HANDOFF = "CLAUDE_CRITIQUE_REQUEST.md"
+CRITIQUE = "GPT_CRITIQUE_FOR_CLAUDE.md"
+
+HANDOFF_BODY = """# Critique request
+
+## Objective and acceptance criteria
+Add the requested function and tests.
+
+## Baseline
+Branch, upstream, HEAD and starting status were supplied by the coordinator.
+
+## Files changed and why
+- `impl.py`: new module holding the requested function.
+- `test_impl.py`: covers integers and floats.
+
+## Tests and checks run
+- python -m pytest test_impl.py -> passed
+
+## Known risks and assumptions
+Risk: none identified beyond the narrow scope of this change.
+
+## Request
+Please perform an independent read-only review.
+"""
+
+
+def record(argv, prompt):
+    log_dir = os.environ.get("FAKE_LOG_DIR")
+    if not log_dir:
+        return
+    path = Path(log_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    index = len(list(path.glob("claude-call-*.json")))
+    (path / f"claude-call-{index}.json").write_text(
+        json.dumps(
+            {
+                "argv": argv,
+                "prompt": prompt,
+                "cwd": os.getcwd(),
+                "child_env": os.environ.get("AGENT_DUET_CHILD"),
+                "has_secret_env": os.environ.get("FAKE_SECRET_TOKEN"),
+            },
+            indent=2,
+        )
+    )
+
+
+def emit(result, is_error=False):
+    print(
+        json.dumps(
+            {
+                "type": "result",
+                "subtype": "success" if not is_error else "error",
+                "is_error": is_error,
+                "result": result,
+                "session_id": "fake-session",
+                "num_turns": 3,
+                "total_cost_usd": 0.0,
+            }
+        )
+    )
+
+
+def main():
+    argv = sys.argv[1:]
+    if argv == ["--version"]:
+        # The coordinator probes versions at start; that is not a workflow call, so it
+        # is deliberately not recorded.
+        print("2.1.236 (Claude Code)")
+        return 0
+    prompt = sys.stdin.read() if not sys.stdin.isatty() else ""
+    record(argv, prompt)
+    behavior = os.environ.get("FAKE_CLAUDE_BEHAVIOR", "normal")
+    cwd = Path.cwd()
+    reconciling = (cwd / CRITIQUE).exists()
+
+    if behavior == "fail":
+        print("fake-claude: deliberate failure", file=sys.stderr)
+        return 3
+    if behavior == "error_result":
+        emit("deliberate error result", is_error=True)
+        return 0
+    if behavior == "bad_json":
+        print("this is not json")
+        return 0
+    if behavior == "hang":
+        import time
+
+        time.sleep(3600)
+        return 0
+
+    if reconciling:
+        if behavior == "reconcile_add_remote":
+            subprocess.run(
+                ["git", "remote", "add", "sneaky", "https://example.invalid/x.git"],
+                cwd=cwd,
+                check=False,
+            )
+        if behavior == "reconcile_commit":
+            subprocess.run(["git", "add", "-A"], cwd=cwd, check=False)
+            subprocess.run(["git", "commit", "-m", "sneaky"], cwd=cwd, check=False)
+        (cwd / "impl.py").write_text(
+            '"""Addition helper."""\n\n\ndef add(a, b):\n    """Return a + b."""\n    return a + b\n'
+        )
+        emit(
+            "Reviewed every critique item.\n"
+            "- Item 1: accepted, docstring added.\n"
+            "- Item 2: rejected, the concern did not reproduce.\n"
+            "Validation: python -m pytest -> passed.\n"
+            "COMMIT_MESSAGE: Add add() with integer and float tests\n"
+        )
+        return 0
+
+    # Implementation phase.
+    if behavior == "no_handoff":
+        (cwd / "impl.py").write_text("def add(a, b):\n    return a + b\n")
+        emit("done, but no handoff written")
+        return 0
+    if behavior == "writes_critique":
+        (cwd / CRITIQUE).write_text("I wrote the reviewer's file myself.\n")
+        (cwd / HANDOFF).write_text(HANDOFF_BODY)
+        emit("wrote both files")
+        return 0
+    if behavior == "no_changes":
+        (cwd / HANDOFF).write_text(HANDOFF_BODY)
+        emit("nothing to change")
+        return 0
+    if behavior == "commit":
+        (cwd / "impl.py").write_text("def add(a, b):\n    return a + b\n")
+        (cwd / HANDOFF).write_text(HANDOFF_BODY)
+        subprocess.run(["git", "add", "-A"], cwd=cwd, check=False)
+        subprocess.run(["git", "commit", "-m", "premature"], cwd=cwd, check=False)
+        emit("committed early")
+        return 0
+    if behavior == "add_remote":
+        (cwd / "impl.py").write_text("def add(a, b):\n    return a + b\n")
+        (cwd / HANDOFF).write_text(HANDOFF_BODY)
+        subprocess.run(
+            ["git", "remote", "add", "sneaky", "https://example.invalid/x.git"],
+            cwd=cwd,
+            check=False,
+        )
+        emit("added a remote")
+        return 0
+    if behavior == "secret":
+        (cwd / "leak.py").write_text('GITHUB_TOKEN = "ghp_' + "A" * 36 + '"\n')
+        (cwd / HANDOFF).write_text(HANDOFF_BODY)
+        emit("wrote a file with a credential in it")
+        return 0
+
+    (cwd / "impl.py").write_text("def add(a, b):\n    return a + b\n")
+    (cwd / "test_impl.py").write_text(
+        "from impl import add\n\n\n"
+        "def test_ints():\n    assert add(1, 2) == 3\n\n\n"
+        "def test_floats():\n    assert add(0.5, 0.25) == 0.75\n"
+    )
+    (cwd / HANDOFF).write_text(HANDOFF_BODY)
+    emit("Implemented add() and tests. Validation: pytest passed.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

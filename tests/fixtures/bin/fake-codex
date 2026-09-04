@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""A deterministic stand-in for the Codex CLI's `exec` subcommand."""
+
+import json
+import os
+import sys
+from pathlib import Path
+
+CRITIQUE = """# Review
+
+## 1. Verdict
+Approve with minor comments.
+
+## 2. Repository state reviewed
+Worktree at the supplied base commit, with the implementer's uncommitted changes.
+
+## 3. What was inspected
+`impl.py`, `test_impl.py`, and the handoff request.
+
+## 4. Confirmed issues
+- Severity: low. `add` has no docstring. Evidence: `impl.py` line 1. Correction: add one.
+  Validation: re-read the file.
+
+## 5. Improvement opportunities
+Consider a type annotation.
+
+## 6. Disproven or unsupported concerns
+None.
+
+## 7. Validation performed
+Read-only inspection only; no commands were run that mutate state.
+
+## 8. Remaining risks and assumptions
+Assumes the intended semantics are numeric addition.
+
+## 9. Prioritized checklist for Claude
+1. Add a docstring to `add`.
+2. Leave the tests as they are.
+"""
+
+
+def record(argv, prompt):
+    log_dir = os.environ.get("FAKE_LOG_DIR")
+    if not log_dir:
+        return
+    path = Path(log_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    index = len(list(path.glob("codex-call-*.json")))
+    (path / f"codex-call-{index}.json").write_text(
+        json.dumps(
+            {
+                "argv": argv,
+                "prompt": prompt,
+                "cwd": os.getcwd(),
+                "child_env": os.environ.get("AGENT_DUET_CHILD"),
+            },
+            indent=2,
+        )
+    )
+
+
+def out_path(argv):
+    for flag in ("--output-last-message", "-o"):
+        if flag in argv:
+            return Path(argv[argv.index(flag) + 1])
+    return None
+
+
+def cd_path(argv):
+    for flag in ("-C", "--cd"):
+        if flag in argv:
+            return Path(argv[argv.index(flag) + 1])
+    return Path.cwd()
+
+
+def main():
+    argv = sys.argv[1:]
+    if argv in (["--version"], ["-V"]):
+        # Version probes are not workflow calls and are deliberately not recorded.
+        print("codex-cli 0.153.2")
+        return 0
+    prompt = sys.stdin.read() if not sys.stdin.isatty() else ""
+    record(argv, prompt)
+    behavior = os.environ.get("FAKE_CODEX_BEHAVIOR", "normal")
+
+    if argv and argv[0] != "exec":
+        print("fake-codex: expected the exec subcommand", file=sys.stderr)
+        return 2
+    if behavior == "fail":
+        print("fake-codex: deliberate failure", file=sys.stderr)
+        return 4
+    if behavior == "hang":
+        import time
+
+        time.sleep(3600)
+        return 0
+
+    workdir = cd_path(argv)
+    if behavior == "mutate":
+        (workdir / "reviewer_touched.txt").write_text("the reviewer wrote this\n")
+
+    text = CRITIQUE
+    if behavior == "short":
+        text = "Looks fine."
+    if behavior == "missing_sections":
+        text = "## Verdict\nApprove.\n" + ("padding line\n" * 40)
+    if behavior == "secret":
+        text = CRITIQUE + "\nI found this token in the logs: ghp_" + "B" * 36 + "\n"
+
+    print(json.dumps({"type": "thread.started", "thread_id": "fake-thread"}))
+    print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": text}}))
+    if behavior != "no_completion":
+        print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 1}}))
+
+    target = out_path(argv)
+    if target is not None and behavior != "no_last_message":
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
