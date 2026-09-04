@@ -68,10 +68,17 @@ def test_the_template_actually_renders(name):
 def test_every_child_is_told_to_keep_searches_inside_its_working_root(name):
     """A phase-1 agent once ran ``find /``, which crossed a 16 TB external mount and
     stalled the run for tens of minutes. Scoping is stated in every phase, not just the
-    one that happened to get it wrong."""
+    one that happened to get it wrong.
+
+    Asserted by substance rather than by sentence, so the wording stays editable: the
+    prompt has to scope searches to the working root, warn what an unscoped one costs,
+    and state the deadline. Pinning the exact phrasing only makes rewrites fail.
+    """
     text = (PROMPTS / name).read_text()
     assert "Root every filesystem search" in text
-    assert "{timeout_minutes} minutes for this phase" in text
+    assert "$HOME" in text, "must name the roots that go wrong, not just say 'be careful'"
+    assert "mounted volume" in text, "must say why an unscoped search is expensive"
+    assert "{timeout_minutes} minutes" in text, "must tell the phase its own deadline"
 
 
 def test_the_phase_deadline_comes_from_the_configured_timeout():
