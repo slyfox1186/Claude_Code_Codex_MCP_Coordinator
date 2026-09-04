@@ -355,16 +355,29 @@ def fingerprint(worktree: Path) -> Fingerprint:
     )
 
 
-def combined_diff_sha256(worktree: Path, base_sha: str) -> str:
-    """Return a stable fingerprint of everything this run changed since ``base_sha``.
+def combined_diff_sha256(
+    worktree: Path, base_sha: str, paths: Sequence[str] | None = None
+) -> str:
+    """Return a stable fingerprint of what changed since ``base_sha``.
 
     Tracked modifications come from ``git diff`` against the base commit; untracked
     files are hashed by path and content so a new file cannot slip past unnoticed.
+
+    ``paths`` scopes the fingerprint to a known set. The coordinator passes the paths
+    the *agents* changed, so artifacts a validation command produced afterwards
+    (``__pycache__``, coverage data, build output) neither enter the fingerprint nor
+    invalidate it if they are later cleaned up.
     """
-    tracked = run_git(["diff", "--no-color", base_sha], cwd=worktree).stdout
+    args = ["diff", "--no-color", base_sha]
+    if paths is not None:
+        args += ["--", *paths]
+    tracked = run_git(args, cwd=worktree).stdout
     hasher = hashlib.sha256()
     hasher.update(tracked.encode("utf-8", errors="replace"))
+    allowed = None if paths is None else set(paths)
     for rel in untracked_paths(worktree):
+        if allowed is not None and rel not in allowed:
+            continue
         hasher.update(b"\0untracked\0")
         hasher.update(rel.encode())
         target = worktree / rel

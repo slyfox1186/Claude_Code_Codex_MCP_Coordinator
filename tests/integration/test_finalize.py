@@ -99,13 +99,32 @@ def test_finalize_commits_only_run_owned_paths(
     ]
 
 
-def test_a_stray_file_appearing_after_validation_blocks_the_commit(
+def test_a_stray_file_outside_the_run_is_never_committed(
     runtime, config, store, repo, bare_remote, fake_log_dir
 ):
-    """An untracked file added after validation changes the fingerprint, so finalize
-    refuses outright rather than quietly committing a subset of a changed tree."""
+    """An unrelated untracked file must not be committed, and must not block publishing.
+
+    The run owns a fixed set of paths. Anything else in the worktree — a validator's
+    __pycache__, a developer's scratch file — is outside that set: never staged, and
+    never a reason to refuse work that was validated."""
     record = ready_run(config, store, repo)
     (Path(record.worktree) / "stray.txt").write_text("not part of this run\n")
+    result = finalize(record, bare_remote)
+    assert result.phase is Phase.COMPLETE
+    assert "stray.txt" not in result.staged_paths
+    shown = git(
+        "show", "--name-only", "--pretty=format:", result.local_commit_sha,
+        cwd=Path(record.worktree),
+    )
+    assert "stray.txt" not in shown.stdout
+
+
+def test_a_change_to_a_run_owned_file_still_blocks_the_commit(
+    runtime, config, store, repo, bare_remote, fake_log_dir
+):
+    """Scoping the fingerprint must not weaken the gate on the run's own files."""
+    record = ready_run(config, store, repo)
+    (Path(record.worktree) / "impl.py").write_text("def add(a, b):\n    return a - b\n")
     with pytest.raises(ToolError, match="changed after validation"):
         finalize(record, bare_remote)
     listed = git("ls-remote", str(bare_remote), f"refs/heads/{record.branch}", cwd=repo)
@@ -303,6 +322,11 @@ def test_a_run_that_changed_nothing_cannot_be_committed(
 ):
     """An empty commit set is refused rather than producing an empty commit."""
     record = ready_run(config, store, repo)
-    store.update(record.run_id, owned_paths=[])
+    # Clearing the owned set also changes the scoped fingerprint, so re-record both to
+    # isolate the "nothing to commit" gate rather than tripping the staleness gate.
+    from agent_duet.git_guard import combined_diff_sha256
+
+    empty_digest = combined_diff_sha256(Path(record.worktree), record.base_sha, [])
+    store.update(record.run_id, owned_paths=[], validated_diff_sha256=empty_digest)
     with pytest.raises(ToolError, match="nothing to commit"):
         finalize(store.get(record.run_id), bare_remote)

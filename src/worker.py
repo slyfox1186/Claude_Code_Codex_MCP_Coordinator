@@ -627,6 +627,14 @@ class Worker:
                 f"{sorted(info.remotes)}"
             )
 
+        # Snapshot what the AGENTS changed, before any validation command runs. A test
+        # suite legitimately writes __pycache__, .coverage, build output and the like;
+        # those are the validator's artifacts, not the run's work, and sweeping them
+        # into the commit set would publish them. The set is fixed here and everything
+        # downstream uses it.
+        owned = changed_paths(worktree, base)
+        logger.debug("run %s: run-owned paths before validation: %s", self.run_id, owned)
+
         repo_cfg = self.config.repository_for(Path(record.repo_path))
         results: list[ValidationResult] = []
         if repo_cfg and repo_cfg.validation_commands:
@@ -648,8 +656,15 @@ class Worker:
                     )
 
         manifest = self._write_manifest(run_dir, results)
-        owned = changed_paths(worktree, base)
-        diff_sha = combined_diff_sha256(worktree, base)
+        produced = sorted(set(changed_paths(worktree, base)) - set(owned))
+        if produced:
+            logger.info(
+                "run %s: ignoring %d path(s) produced by validation, not by the agents: %s",
+                self.run_id,
+                len(produced),
+                produced[:20],
+            )
+        diff_sha = combined_diff_sha256(worktree, base, owned)
         # The authoritative gate: the exact git tree committing these paths would build.
         tree_sha = owned_tree_sha(worktree, base, owned, run_dir / "validation.index")
         logger.info(
@@ -683,6 +698,7 @@ class Worker:
                 "proposed_commit_message": proposed_message,
                 "validations": [item.model_dump() for item in results],
                 "changed_path_count": len(owned),
+                "validation_produced_paths": produced,
                 "run_dir": str(run_dir),
             },
         )

@@ -646,7 +646,7 @@ def _finalize_locked(
                 f"{normalize_remote_url(actual_remote)!r}. Refusing to publish."
             )
 
-    current_diff = combined_diff_sha256(worktree, base)
+    current_diff = combined_diff_sha256(worktree, base, record.owned_paths)
     logger.info(
         "finalize %s: diff fingerprint validated=%s current=%s",
         run_key,

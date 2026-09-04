@@ -1,9 +1,129 @@
+# ---------------------------------------------------------------------------
+# agent-duet coordination artifacts
+#
+# A run writes these into the working tree it operates on. The coordinator archives
+# and removes them before validation, and finalize refuses to commit them, but a
+# failed or cancelled run can leave them behind — and this repository is itself a
+# valid run target. Ignoring them keeps a crashed run from ever staging its scratch.
+# ---------------------------------------------------------------------------
+CLAUDE_CRITIQUE_REQUEST.md
+GPT_CRITIQUE_FOR_CLAUDE.md
+
+# Review scratch dropped in by hand. Critiques are working notes, not deliverables:
+# whatever they were right about belongs in the code and in a test, and whatever they
+# were wrong about should not sit in the repository contradicting it.
+GPT_CRITIQUE.md
+CLAUDE_CRITIQUE.md
+*_CRITIQUE.md
+*_CRITIQUE_*.md
+CRITIQUE*.md
+BUILD_SPEC.md
+
+# Files the test fixtures write when a fake agent is pointed at a real tree.
+/impl.py
+/test_impl.py
+
+# Throwaway git indexes built by owned_tree_sha().
+*.index
+!*.index/
+
+# Local state, config, and logs. These belong in ~/.local/state and ~/.config;
+# a copy here would be machine-specific at best and credential-bearing at worst.
+config.toml
+state.sqlite3*
+/runs/
+/worktrees/
+/logs/
+*.log
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
 __pycache__/
 *.py[cod]
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-*.egg-info/
+*$py.class
+*.so
+.Python
+
+# Packaging and build output
 build/
 dist/
+sdist/
+wheels/
+*.egg
+*.egg-info/
+.eggs/
+MANIFEST
+pip-wheel-metadata/
+share/python-wheels/
+
+# Environments. This project installs into the interpreter that runs pip and does
+# not use a virtualenv, but an accidental one must never be committed.
 .venv/
+venv/
+env/
+ENV/
+.python-version
+uv.lock
+
+# Test, type, and lint caches
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+.tox/
+.nox/
+.hypothesis/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+nosetests.xml
+junit*.xml
+
+# ---------------------------------------------------------------------------
+# Secrets and local overrides
+#
+# Nothing in this project reads a .env file, deliberately. These patterns exist so a
+# stray one cannot be committed by accident.
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+!**/prompts/*.md
+secrets.*
+credentials.*
+*.credentials
+
+# ---------------------------------------------------------------------------
+# Editors and operating systems
+# ---------------------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*.sublime-*
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+desktop.ini
+*~
+.\#*
+\#*\#
+
+# Scratch and backups
+*.bak
+*.orig
+*.rej
+*.tmp
+*.old
+/scratch/
+/tmp/
