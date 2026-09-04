@@ -33,61 +33,53 @@ virtualenv: the package installs into the Python interpreter you name below.
 ## Install
 
 ```bash
-PY=/home/YOU/miniconda3/bin/python          # your interpreter
-
 git clone <your private repo url> "$HOME/src/agent-duet"
 cd "$HOME/src/agent-duet"
-"$PY" -m pip install -r requirements-lock.txt
-"$PY" -m pip install -e ".[dev]"
-"$PY" -m pytest
+./setup.sh
 ```
 
-Then create the config:
+That is the whole installation. `setup.sh` installs the package, writes
+`~/.config/agent-duet/config.toml` with your real paths filled in, locks the config and
+state directories to your account, registers the server with both Claude Code and Codex
+(including the 330 s tool timeout `duet_wait` needs and the five-tool allowlist Codex
+requires), installs the `/duet` command into both CLIs, and offers to build a throwaway
+project so your first run is not against something you care about.
+
+It parses every file back before writing it, backs up anything it replaces to
+`<name>.duet-backup`, never uses `sudo`, and is safe to re-run.
 
 ```bash
-mkdir -p "$HOME/.config/agent-duet" "$HOME/.local/state/agent-duet"
-cp config.example.toml "$HOME/.config/agent-duet/config.toml"
-$EDITOR "$HOME/.config/agent-duet/config.toml"   # replace every REPLACE_ME
-chmod 700 "$HOME/.config/agent-duet" "$HOME/.local/state/agent-duet"
-chmod 600 "$HOME/.config/agent-duet/config.toml"
-agent-duet doctor
+./setup.sh check                    # is everything working?
+./setup.sh add-repo ~/code/project  # let it work on a project
+./setup.sh remove-repo ~/code/project
+./setup.sh demo                     # throwaway project to try it on
+./setup.sh demo --clean
+./setup.sh uninstall
 ```
+
+`add-repo` allows the project's parent directory, detects its test suite (pytest,
+`npm test`, `cargo test`, `go test`), and writes the `[[repositories]]` entry between
+markers so `remove-repo` takes it back out cleanly.
+
+### If you would rather do it by hand
+
+Everything above is ordinary configuration; nothing is hidden. Copy
+`config.example.toml` to `~/.config/agent-duet/config.toml`, replace every `REPLACE_ME`,
+`chmod 700` the config and state directories and `600` the config file, then run
+`agent-duet doctor`. Register the server with
+`claude mcp add-json --scope user agent_duet '{"type":"stdio","command":"<path>","args":[],"env":{},"timeout":330000}'`
+and `codex mcp add agent_duet -- <path>`, then add `tool_timeout_sec = 330` and
+`enabled_tools` to the `[mcp_servers.agent_duet]` table Codex wrote. Finally copy
+`commands/duet.md` into `~/.claude/commands/` and `~/.codex/prompts/`.
 
 The config file must be a regular file you own, and must not be group- or
 world-writable: it names the executables to run and the exact command vectors the
 coordinator will execute, so write access to it is equivalent to code execution.
 Loading refuses otherwise.
 
-`doctor` resolves both CLI paths, prints their versions, checks the state directory
-permissions and the SQLite database, and never prints a credential.
-
-## Register with both CLIs
-
-Use the absolute path of the installed console script (`command -v agent-duet`):
-
-```bash
-DUET_BIN="$(command -v agent-duet)"
-
-claude mcp add-json --scope user agent_duet \
-  "{\"type\":\"stdio\",\"command\":\"$DUET_BIN\",\"args\":[],\"env\":{},\"timeout\":330000}"
-
-codex mcp add agent_duet -- "$DUET_BIN"
-```
-
-Then run `/mcp` inside each client and confirm exactly five tools appear.
-
 ## The /duet slash command
 
-One command drives the whole workflow from either CLI. Install it with:
-
-```bash
-./scripts/install-slash-command.sh
-```
-
-That copies `commands/duet.md` into `~/.claude/commands/` and `~/.codex/prompts/`. It
-only ever writes into your own config directories, never uses `sudo`, and backs up an
-existing `duet.md` before replacing it. Use `--claude` or `--codex` to install for just
-one, and `--uninstall` to remove it.
+One command drives the whole workflow from either CLI.
 
 Then, in either CLI:
 

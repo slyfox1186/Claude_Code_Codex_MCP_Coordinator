@@ -143,143 +143,80 @@ suite means the install is not usable, not that the tests are wrong.
 
 ---
 
-## 5. Configure
-
-```bash
-mkdir -p "$HOME/.config/agent-duet" "$HOME/.local/state/agent-duet"
-cp config.example.toml "$HOME/.config/agent-duet/config.toml"
-chmod 700 "$HOME/.config/agent-duet" "$HOME/.local/state/agent-duet"
-chmod 600 "$HOME/.config/agent-duet/config.toml"
-```
-
-Edit `$HOME/.config/agent-duet/config.toml` and replace **every** `REPLACE_ME`:
-
-| Key | Value to use |
-|---|---|
-| `allowed_repo_roots` | the directory your projects live under, e.g. `["/home/YOU/tmp"]` |
-| `state_dir` | `/home/YOU/.local/state/agent-duet` |
-| `[claude] executable` | output of `command -v claude` |
-| `[codex] executable` | output of `command -v codex` |
-
-Rules the loader enforces, so get them right the first time:
-
-- Unknown keys are a hard error. A typo fails loudly instead of being ignored.
-- `allowed_repo_roots` entries must be absolute, and may not be `/` or a home directory
-  itself. A run target must sit *strictly below* a listed root.
-- The config file must be a regular file **you own**, not a symlink, and not group- or
-  world-writable. It names the executables to run and the exact command vectors the
-  coordinator will execute, so write access to it is equivalent to code execution.
-
-Optional but recommended, per repository you intend to use:
-
-```toml
-[[repositories]]
-path = "/home/YOU/tmp/some-project"
-validation_commands = [
-  ["/home/YOU/miniconda3/bin/python", "-m", "pytest", "-q"],
-]
-validation_timeout_seconds = 600
-```
-
-These are the coordinator's own authoritative checks, run after the agents finish. They
-are command **vectors**, never shell strings, and they are read only from this file —
-never from task text or from a file inside the repository under test.
-
-Then:
-
-```bash
-agent-duet doctor
-```
-
-**Check:** the last line is `result: OK`. It also prints both CLI versions, the resolved
-executable paths, the state directory mode (`0o700`), and the SQLite status. It never
-prints a credential. If it reports a problem, fix that problem before continuing.
-
----
-
-## 6. Register with both CLIs
-
-Use the absolute path from step 3.
-
-```bash
-DUET_BIN="$(command -v agent-duet)"
-
-claude mcp add-json --scope user agent_duet \
-  "{\"type\":\"stdio\",\"command\":\"$DUET_BIN\",\"args\":[],\"env\":{},\"timeout\":330000}"
-
-codex mcp add agent_duet -- "$DUET_BIN"
-```
-
-Then open `$HOME/.codex/config.toml` and extend the `agent_duet` table that
-`codex mcp add` just created. Do not add a second table:
-
-```toml
-[mcp_servers.agent_duet]
-command = "/absolute/path/to/agent-duet"
-args = []
-startup_timeout_sec = 20
-# duet_wait blocks for up to 300s, so the tool timeout must sit above that.
-tool_timeout_sec = 330
-enabled_tools = ["duet_start", "duet_status", "duet_wait", "duet_cancel", "duet_finalize"]
-```
-
-**Checks**
-
-```bash
-claude mcp get agent_duet     # Status: ✔ Connected
-codex mcp get agent_duet      # enabled_tools lists all five
-```
-
-Then start each CLI interactively and run `/mcp`. Both must show `agent_duet` with
-**exactly five** tools: `duet_start`, `duet_status`, `duet_wait`, `duet_cancel`,
-`duet_finalize`.
-
-The 330 000 ms / 330 s timeouts are not decoration. `duet_wait` deliberately blocks for
-up to 300 s, and a client timeout below that will kill a healthy call.
-
----
-
-## 6b. Install the /duet slash command
+## 5. Configure and register — one command
 
 ```bash
 cd "$HOME/src/agent-duet"
-./scripts/install-slash-command.sh
+./setup.sh install
 ```
+
+That single command does all of the following, and refuses to write any file it cannot
+parse back:
+
+| It does this | Instead of you doing this |
+|---|---|
+| Writes `$HOME/.config/agent-duet/config.toml` from `config.example.toml`, with the real paths filled in | Copying the example and replacing four `REPLACE_ME` placeholders by hand |
+| `chmod 700` on the config and state directories, `600` on the config | Remembering to, and being refused at load time if you forget |
+| `claude mcp add-json --scope user` with a 330 000 ms timeout | Hand-writing escaped JSON on the command line |
+| `codex mcp add`, then extends that table with `startup_timeout_sec`, `tool_timeout_sec = 330`, and the five-tool allowlist | Hand-editing `$HOME/.codex/config.toml` and not accidentally creating a second table |
+| Installs `commands/duet.md` into `~/.claude/commands/` and `~/.codex/prompts/` | Copying two files |
+
+It backs up anything it overwrites to `<name>.duet-backup`, never uses `sudo`, and is safe
+to run repeatedly.
+
+The 330 s timeouts are not decoration: `duet_wait` deliberately blocks for up to 300 s, and
+a client timeout below that kills a healthy call.
 
 **Checks**
 
 ```bash
-ls -l "$HOME/.claude/commands/duet.md" "$HOME/.codex/prompts/duet.md"
+./setup.sh check
 ```
 
-Both exist. In an interactive session, typing `/duet` offers the command.
+Every line is a `✓`, ending in `Everything works.` It verifies `agent-duet doctor`, that
+Claude Code reports `Connected`, that Codex reports all five tools, and that both `/duet`
+files exist.
 
-The script only copies `commands/duet.md` into those two config directories. It needs no
-elevation, and it backs up any existing `duet.md` before overwriting. `--claude` and
-`--codex` limit it to one CLI; `--uninstall` removes what it installed.
+Then start each CLI interactively and run `/mcp`. Both must show `agent_duet` with exactly
+five tools: `duet_start`, `duet_status`, `duet_wait`, `duet_cancel`, `duet_finalize`.
+
+### Allowing a repository
+
+The coordinator will only work on a repository that is named in the config, and only if it
+sits **strictly below** an `allowed_repo_roots` entry.
+
+```bash
+./setup.sh add-repo /path/to/project
+```
+
+This allows the project's parent directory, detects its test suite (pytest, `npm test`,
+`cargo test`, or `go test`), and writes the `[[repositories]]` entry between markers so
+`./setup.sh remove-repo` can take it back out cleanly. It refuses a project sitting
+directly in `$HOME` and tells you to move it one level down, because the loader will not
+accept a home directory as a root.
+
+Those `validation_commands` are the coordinator's own authoritative check, run after both
+agents finish. They are command **vectors**, never shell strings, and they are read only
+from this config file — never from task text or from a file inside the repository under
+test. Edit them by hand whenever the detected default is not what you want.
 
 ---
 
-## 7. Prove it end to end on a disposable repository
+## 6. Prove it end to end on a disposable repository
 
 Do **not** make the first run against anything you care about.
 
 ```bash
-rm -rf "$HOME/tmp/duet-smoke" && mkdir -p "$HOME/tmp/duet-smoke"
-cd "$HOME/tmp/duet-smoke"
-git init -q -b main .
-git config user.email "you@example.com"
-git config user.name "You"
-printf '# duet-smoke\n' > README.md
-printf '#!/usr/bin/env python3\n"""Tiny module."""\n\n\ndef multiply(a, b):\n    """Return a * b."""\n    return a * b\n' > calc.py
-printf '#!/usr/bin/env python3\n"""Tests."""\n\nfrom calc import multiply\n\n\ndef test_multiply():\n    assert multiply(3, 4) == 12\n' > test_calc.py
-git add -A && git commit -q -m "initial"
-git rev-parse HEAD
+cd "$HOME/src/agent-duet"
+./setup.sh demo
 ```
 
-Add it to your config as a `[[repositories]]` entry with a real validation command (see
-step 5), re-run `agent-duet doctor`, then start an interactive Claude Code session in
-that directory and say:
+That builds a throwaway git repository at `$HOME/duet-demo/smoke` with a `multiply`
+function and a passing test, gives it a local bare remote so push can be verified for
+real, registers it, and prints the two lines to copy. `./setup.sh demo --clean` removes
+the directory, the `[[repositories]]` entry, and the allowed root it added.
+
+Then start an interactive Claude Code session in that directory and say:
 
 ```
 Use agent_duet to run the full Claude->Codex->Claude workflow in this repository.
@@ -350,7 +287,7 @@ records the active child's group and reaps it first.
 
 ---
 
-## 8. Finalize, only when you mean it
+## 7. Finalize, only when you mean it
 
 From the interactive session, once you have read the evidence:
 
@@ -377,7 +314,7 @@ present; or a changed file contains credential-shaped content.
 
 ---
 
-## 9. Two-machine rules
+## 8. Two-machine rules
 
 - Install the same commit on both PCs. Verify with `git rev-parse HEAD`.
 - Configuration is machine-local. Executable and repository paths differ; do not copy
@@ -391,7 +328,7 @@ present; or a changed file contains credential-shaped content.
 
 ---
 
-## 10. Troubleshooting
+## 9. Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -416,7 +353,7 @@ agent-duet gc --older-than 30 --apply      # remove exactly what the dry run lis
 
 ---
 
-## 11. Done means all of this is true
+## 10. Done means all of this is true
 
 - `agent-duet --version`, `doctor`, `pytest`, `ruff`, and `mypy` all pass.
 - Both clients show exactly five `agent_duet` tools.
