@@ -239,6 +239,27 @@ up to 300 s, and a client timeout below that will kill a healthy call.
 
 ---
 
+## 6b. Install the /duet slash command
+
+```bash
+cd "$HOME/src/agent-duet"
+./scripts/install-slash-command.sh
+```
+
+**Checks**
+
+```bash
+ls -l "$HOME/.claude/commands/duet.md" "$HOME/.codex/prompts/duet.md"
+```
+
+Both exist. In an interactive session, typing `/duet` offers the command.
+
+The script only copies `commands/duet.md` into those two config directories. It needs no
+elevation, and it backs up any existing `duet.md` before overwriting. `--claude` and
+`--codex` limit it to one CLI; `--uninstall` removes what it installed.
+
+---
+
 ## 7. Prove it end to end on a disposable repository
 
 Do **not** make the first run against anything you care about.

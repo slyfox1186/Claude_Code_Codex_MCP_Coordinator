@@ -185,6 +185,35 @@ def normalize_remote_url(url: str) -> str:
     return value.lower()
 
 
+def _explain_broken_repo(path: Path, probe: GitResult) -> str:
+    """Turn a bare `git rev-parse` failure into something an operator can act on.
+
+    The common case in practice is a linked worktree whose parent repository was
+    deleted or moved while a run was in flight. Git only says "not a git repository",
+    which sends people looking in the wrong place.
+    """
+    dotgit = path / ".git"
+    if dotgit.is_file():
+        try:
+            pointer = dotgit.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            pointer = ""
+        target = pointer.removeprefix("gitdir:").strip()
+        if target and not Path(target).exists():
+            return (
+                f"{path} is a linked worktree whose parent repository is gone: its "
+                f".git file points at {target}, which no longer exists. The canonical "
+                "repository was deleted or moved while this run was in flight. Nothing "
+                "was committed or pushed."
+            )
+    if not dotgit.exists():
+        return (
+            f"{path} is no longer a git repository (no .git entry). It was deleted, "
+            "moved, or replaced while this run was in flight."
+        )
+    return f"{path} could not be inspected by git: {probe.stderr.strip() or 'unknown error'}"
+
+
 def inspect_repo(repo_path: Path) -> RepoInfo:
     """Validate ``repo_path`` is a real repository and capture its exact state."""
     canonical = _canonical(repo_path)
@@ -195,8 +224,10 @@ def inspect_repo(repo_path: Path) -> RepoInfo:
     if canonical.name == ".git":
         raise GitError("refusing to operate on a .git directory")
 
-    toplevel_out = run_git(["rev-parse", "--show-toplevel"], cwd=canonical).stdout.strip()
-    toplevel = Path(toplevel_out).resolve()
+    toplevel_probe = run_git(["rev-parse", "--show-toplevel"], cwd=canonical, check=False)
+    if not toplevel_probe.ok:
+        raise GitError(_explain_broken_repo(canonical, toplevel_probe))
+    toplevel = Path(toplevel_probe.stdout.strip()).resolve()
     if toplevel != canonical:
         raise GitError(
             f"{canonical} is not the repository root; git reports {toplevel}. "

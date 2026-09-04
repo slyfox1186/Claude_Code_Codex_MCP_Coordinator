@@ -76,6 +76,33 @@ codex mcp add agent_duet -- "$DUET_BIN"
 
 Then run `/mcp` inside each client and confirm exactly five tools appear.
 
+## The /duet slash command
+
+One command drives the whole workflow from either CLI. Install it with:
+
+```bash
+./scripts/install-slash-command.sh
+```
+
+That copies `commands/duet.md` into `~/.claude/commands/` and `~/.codex/prompts/`. It
+only ever writes into your own config directories, never uses `sudo`, and backs up an
+existing `duet.md` before replacing it. Use `--claude` or `--codex` to install for just
+one, and `--uninstall` to remove it.
+
+Then, in either CLI:
+
+```
+/duet Add retry-with-backoff to the HTTP client and cover it with tests
+```
+
+Run it bare and it collects what it needs first — drafting the task from the conversation
+when there is context to draft from, asking when there is not, and confirming acceptance
+criteria before anything starts:
+
+```
+/duet
+```
+
 ## Daily use
 
 Ask either CLI, in its own words:

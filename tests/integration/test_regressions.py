@@ -440,3 +440,52 @@ def test_a_second_concurrent_run_is_refused(config, store, repo, work_root):
             asyncio.run(duet_start(repo_path=str(other), task="anything at all"))
     finally:
         RUNTIME.reset()
+
+
+# ---------------------------------------------------------------------------
+# Observed live: the canonical repository was deleted mid-run by an unrelated
+# cleanup process. The run must fail safely and say something useful.
+# ---------------------------------------------------------------------------
+
+
+def test_a_deleted_parent_repository_is_explained_clearly(config, store, repo, tmp_path):
+    """A linked worktree whose parent is gone must not report a bare git error."""
+    import shutil
+
+    from agent_duet.git_guard import GitError, add_worktree, inspect_repo
+
+    worktree = tmp_path / "orphan-worktree"
+    add_worktree(repo, worktree, "agent-duet/orphan", inspect_repo(repo).head_sha)
+    shutil.rmtree(repo)
+
+    with pytest.raises(GitError, match="parent repository is gone"):
+        inspect_repo(worktree)
+
+
+def test_a_repository_replaced_by_a_plain_directory_is_explained(tmp_path):
+    from agent_duet.git_guard import GitError, inspect_repo
+
+    plain = tmp_path / "not-a-repo"
+    plain.mkdir()
+    with pytest.raises(GitError, match=r"no longer a git repository|not the repository root"):
+        inspect_repo(plain)
+
+
+def test_losing_the_repository_mid_run_commits_nothing(config, store, repo, fake_log_dir):
+    """The whole point: an environment fault fails the run, it never half-publishes."""
+    import shutil
+
+    record = start(config, store, repo)
+    worktree = config.worktrees_dir / f"{repo.name}-{record.run_id[:8]}" / record.run_id[:8]
+    from agent_duet.git_guard import add_worktree, inspect_repo
+
+    add_worktree(repo, worktree, record.branch, inspect_repo(repo).head_sha)
+    store.update(record.run_id, worktree=str(worktree))
+    shutil.rmtree(repo)
+
+    run_worker(config, store, record.run_id)
+    final = store.get(record.run_id)
+    assert final.phase is Phase.FAILED
+    assert final.error
+    assert final.validated_tree_sha is None, "nothing may be marked validated"
+    assert final.active_child_pid is None

@@ -1,0 +1,100 @@
+---
+description: Run the full Claude->Codex->Claude implement/review/reconcile workflow via agent_duet
+argument-hint: [task description, or blank to use the current conversation]
+---
+
+# Run an agent_duet workflow
+
+You are driving the `agent_duet` MCP coordinator. It runs a fresh Claude Code process to
+implement, a fresh Codex process to review independently, and a fresh Claude Code process
+to adjudicate that review and revalidate. You are the operator's interface to it, not the
+implementer: do not do the work yourself.
+
+## The task
+
+$ARGUMENTS
+
+## Before you start: collect what is missing
+
+A run costs real time and real model turns, and it cannot be steered once it starts. So
+gather everything you need **first**. Never invent a task, and never start on a vague one.
+
+You need four things. Work out which you already have, then ask only for the rest:
+
+| What | Where it usually comes from |
+|---|---|
+| The task | the argument above, or the conversation so far |
+| The repository | the current working directory's repository root |
+| Acceptance criteria | inferred from the task, then confirmed |
+| Delivery mode | default `review_branch`; only ask if the user raised it |
+
+**If the argument above is empty**, do not guess and do not start. Two cases:
+
+- *There is relevant conversation context.* Draft the task and acceptance criteria from
+  it, show the draft, and ask the user to confirm or correct it. Confirming a draft is
+  much less work for them than answering an open question.
+- *There is no useful context.* Ask for the task directly. Prefer `AskUserQuestion` with
+  concrete options when you can see plausible candidates in the repository (a failing
+  test, an obvious TODO, an unfinished module); fall back to an open question when you
+  genuinely cannot tell.
+
+**If the task is present but too thin to act on**, ask targeted questions rather than
+starting and hoping. A task is too thin when a competent implementer could satisfy it in
+materially different, mutually incompatible ways — "make it faster" without a target,
+"add auth" without saying which mechanism, "fix the bug" without saying which one. Ask
+about the specific fork in the road, not for a specification.
+
+Do not interrogate the user. One round of questions, then proceed. If they say "you
+decide", pick the most defensible option, state the assumption you are making, and start.
+
+Restate the final task and acceptance criteria in one short block before calling
+`duet_start`, so what the run received is on the record.
+
+## What to do
+
+1. **Determine the repository.** Use the current working directory's repository root. It
+   must sit below an `allowed_repo_roots` entry in the user's agent-duet config, or
+   `duet_start` will refuse. If it refuses for that reason, tell the user which root is
+   missing rather than trying to work around it.
+
+2. **Write real acceptance criteria** from the task. Concrete and checkable — "existing
+   tests still pass", "the new endpoint rejects an empty payload" — not restatements of
+   the task. If you cannot infer any, say so and ask.
+
+3. **Call `duet_start` exactly once.** Keep the returned `run_id`. Never start a second
+   run for the same task; if you think you need one, stop and ask.
+
+4. **Poll with `duet_wait`**, passing that `run_id` and a timeout between 1 and 300
+   seconds. Keep calling it until the phase is `AWAITING_FINALIZE` or terminal
+   (`COMPLETE`, `FAILED`, `CANCELLED`). Between calls, report the phase in one short line
+   so the user can see progress. A run takes minutes, not seconds — that is normal, and
+   the work continues even if this session ends.
+
+5. **At `AWAITING_FINALIZE`, stop and report.** Summarize, from the returned evidence
+   only:
+   - the branch, base commit, and the exact files the run changed;
+   - each configured validation command and whether it passed;
+   - whether the reviewer was verified as non-mutating
+     (`codex_readonly_verified`), and any mutations it did make;
+   - the proposed commit message;
+   - anything the run flagged as a remaining risk.
+
+   Then ask whether to finalize. **Do not call `duet_finalize` until the user answers
+   yes in a message.** Your own summary is not approval.
+
+6. **If the user approves**, call `duet_finalize` with the run's exact branch, the exact
+   remote URL from the repository, and a commit message. Then report the local commit
+   SHA, the remote SHA, and the deployment status verbatim. If deployment says
+   `NOT_CHECKED`, say `NOT_CHECKED` — never describe it as deployed or healthy.
+
+## Boundaries
+
+- `duet_start` never commits, pushes, or deploys. `duet_finalize` is the only tool that
+  publishes, and it requires explicit approval.
+- Report only what the tools returned. Do not infer that something succeeded because a
+  phase advanced, and never restate a model's claim as evidence.
+- If a run fails, report the phase it failed in and the error verbatim, then stop. Do not
+  retry automatically — a failure usually means something about the repository or the
+  environment needs a human decision.
+- If the user closes the session, the run keeps going. To pick it back up later, call
+  `duet_status` with the `run_id`.
