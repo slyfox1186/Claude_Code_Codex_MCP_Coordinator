@@ -73,8 +73,34 @@ class Cancelled(RuntimeError):
     """The run was cancelled cooperatively between or during phases."""
 
 
+TEMPLATE_NAMES = ("claude_implement.md", "codex_review.md", "claude_reconcile.md")
+
+
 def _load_template(name: str) -> str:
     return (PROMPTS_DIR / name).read_text(encoding="utf-8")
+
+
+def _pin_templates(run_dir: Path) -> Path:
+    """Copy the prompt templates into the run directory and return that directory.
+
+    A worker outlives the session that started it -- often by an hour -- and
+    ``_load_template`` reads from the installed package at the moment each phase begins.
+    Upgrading agent-duet while a run is in flight therefore hands a running worker a
+    template its own code was never written for, and the run dies on a missing
+    placeholder *after* the expensive phases have already succeeded. Observed exactly
+    that: phase 1 and the Codex review both finished, then reconciliation raised
+    ``KeyError: 'timeout_minutes'``.
+
+    Pinning at the start makes each run use one consistent set of templates, and leaves
+    the exact prompts used sitting in the run directory as evidence.
+    """
+    pinned = run_dir / "prompts"
+    pinned.mkdir(parents=True, exist_ok=True, mode=0o700)
+    for name in TEMPLATE_NAMES:
+        target = pinned / name
+        if not target.exists():  # Idempotent: never re-pin a run already under way.
+            atomic_write_text(target, _load_template(name))
+    return pinned
 
 
 def _format_criteria(criteria: list[str]) -> str:
@@ -101,6 +127,10 @@ class Worker:
         path = Path(self.record.run_dir)
         path.mkdir(parents=True, exist_ok=True, mode=0o700)
         return path
+
+    def _template(self, name: str) -> str:
+        """Read one prompt template from this run's pinned copy, not the package."""
+        return (_pin_templates(self._run_dir()) / name).read_text(encoding="utf-8")
 
     def _check_cancel(self) -> None:
         if self.store.get(self.run_id).cancel_requested:
@@ -177,6 +207,7 @@ class Worker:
 
     async def _execute_locked(self, repo: Path) -> None:
         logger.info("run %s: repository lock acquired", self.run_id)
+        _pin_templates(self._run_dir())
         worktree = self._prepare_worktree(repo)
         logger.info("run %s: working tree is %s", self.run_id, worktree)
         self._check_cancel()
@@ -282,7 +313,7 @@ class Worker:
             summary="Claude is implementing the task.",
         )
         info = inspect_repo(worktree)
-        prompt = _load_template("claude_implement.md").format(
+        prompt = self._template("claude_implement.md").format(
             worktree=worktree,
             timeout_minutes=self.config.claude.timeout_seconds // 60,
             repo_path=record.repo_path,
@@ -392,7 +423,7 @@ class Worker:
             },
         )
 
-        prompt = _load_template("codex_review.md").format(
+        prompt = self._template("codex_review.md").format(
             worktree=worktree,
             timeout_minutes=self.config.codex.timeout_seconds // 60,
             base_sha=record.base_sha or "",
@@ -539,7 +570,7 @@ class Worker:
             summary="Claude is adjudicating the critique and fixing justified findings.",
         )
         info = inspect_repo(worktree)
-        prompt = _load_template("claude_reconcile.md").format(
+        prompt = self._template("claude_reconcile.md").format(
             worktree=worktree,
             timeout_minutes=self.config.claude.timeout_seconds // 60,
             repo_path=record.repo_path,

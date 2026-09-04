@@ -39,8 +39,8 @@ def _call_site_keys() -> dict[str, set[str]]:
         inner = node.func.value
         if (
             not isinstance(inner, ast.Call)
-            or not isinstance(inner.func, ast.Name)
-            or inner.func.id != "_load_template"
+            or not isinstance(inner.func, ast.Attribute)
+            or inner.func.attr != "_template"
             or not inner.args
             or not isinstance(inner.args[0], ast.Constant)
         ):
@@ -79,3 +79,41 @@ def test_the_phase_deadline_comes_from_the_configured_timeout():
     source = (SRC / "worker.py").read_text()
     assert source.count("timeout_minutes=self.config.claude.timeout_seconds // 60") == 2
     assert source.count("timeout_minutes=self.config.codex.timeout_seconds // 60") == 1
+
+
+def test_a_run_keeps_the_templates_it_started_with(tmp_path, monkeypatch):
+    """Upgrading agent-duet mid-run must not change a running worker's prompts.
+
+    A worker outlives the session that launched it, and the templates used to be read
+    from the installed package at the moment each phase began. Editing a template while
+    a run was in flight handed the worker a template its own code never matched: phase 1
+    and the Codex review both finished, then reconciliation died on
+    ``KeyError: 'timeout_minutes'`` -- 35 minutes of completed agent work thrown away.
+    """
+    from agent_duet import worker as worker_module
+
+    package_prompts = tmp_path / "package"
+    package_prompts.mkdir()
+    for name in worker_module.TEMPLATE_NAMES:
+        (package_prompts / name).write_text("original {worktree}")
+    monkeypatch.setattr(worker_module, "PROMPTS_DIR", package_prompts)
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    pinned = worker_module._pin_templates(run_dir)
+    assert (pinned / "claude_implement.md").read_text() == "original {worktree}"
+
+    # The package is upgraded underneath the running worker.
+    for name in worker_module.TEMPLATE_NAMES:
+        (package_prompts / name).write_text("upgraded {worktree} {brand_new_placeholder}")
+
+    again = worker_module._pin_templates(run_dir)
+    assert (again / "claude_implement.md").read_text() == "original {worktree}", (
+        "the run must keep the templates it started with"
+    )
+    # And a run started after the upgrade gets the new ones.
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    assert "brand_new_placeholder" in (
+        worker_module._pin_templates(fresh) / "claude_implement.md"
+    ).read_text()
