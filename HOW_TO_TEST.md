@@ -1,41 +1,42 @@
-# How to test agent-duet
+# Try agent-duet in three commands
 
-You need three commands. No files to edit.
+No files to edit. About 15 minutes, most of it waiting.
 
 ---
 
-## The whole thing
+## 1. Install it
 
 ```bash
 cd Claude_Code_Codex_MCP_Coordinator/     # the folder you cloned
 ./setup.sh
 ```
 
-Answer `y` when it offers to try a throwaway project. That is it — the script
-installs everything, writes your config, registers agent-duet with both Claude Code
-and Codex, installs the `/duet` command, and builds a tiny practice project.
+Answer `y` when it offers to build a throwaway project. That is it — the script installs
+everything, writes your config, registers agent-duet with both Claude Code and Codex,
+installs the `/duet` command, and creates a tiny practice project so your first run is not
+against something you care about.
 
-It finishes by printing two lines to copy. They look like this:
+It finishes by printing two lines to copy.
+
+## 2. Run it
 
 ```bash
 cd ~/duet-demo/smoke && claude
 ```
 
-and then, inside that session:
+Then, inside that session:
 
 ```
 /duet Add a pure function add(a, b) to calc.py, with tests covering integers and floats
 ```
 
-**Now wait 5 to 10 minutes.** That is normal. Three separate AI sessions run one after
+## 3. Wait
+
+**5 to 10 minutes.** That is normal, not a hang. Three separate AI sessions run one after
 another: Claude writes the code, Codex reviews it, Claude answers the review. Then your
 tests run.
 
----
-
-## What you should see
-
-Status lines march through these stages:
+The phase marches along:
 
 ```
 QUEUED -> CLAUDE_IMPLEMENTING -> HANDOFF_VALIDATING -> CODEX_REVIEWING
@@ -43,15 +44,15 @@ QUEUED -> CLAUDE_IMPLEMENTING -> HANDOFF_VALIDATING -> CODEX_REVIEWING
        -> AWAITING_FINALIZE
 ```
 
-Then it **stops** and shows you what happened. It asks before committing anything.
+Then it **stops** and tells you what it did.
 
-> If it commits without asking you, that is a bug. Tell me.
+> If it commits anything without asking you first, that is a bug. Tell me.
 
 Say `Finalize this run.` if you are happy with it.
 
 ---
 
-## When you are done
+## Clean up
 
 ```bash
 ./setup.sh demo --clean
@@ -83,6 +84,16 @@ Type `/duet` with nothing after it and it will ask you what you want.
 
 To undo: `./setup.sh remove-repo ~/code/my-project`
 
+**Where the work lands.** By default, on the branch you are already on — so finalizing
+commits there. It needs a clean working tree, because it edits your checkout in place. If
+you would rather it stayed out of your checkout entirely, say so when you start:
+
+```
+/duet <task> — put it on a review branch, I want to look first
+```
+
+That runs in a private copy and leaves the work on its own branch for you to merge.
+
 ---
 
 ## Is it working?
@@ -111,6 +122,7 @@ output to me as-is.
 | Fails at `CODEX_REVIEWING` | run `codex` on its own once and sign in |
 | `not below an allowed_repo_roots entry` | run `./setup.sh add-repo <the project>` |
 | `already active ... max_parallel_global is 1` | it names the run; `agent-duet cancel <run-id>` frees the slot |
+| `refusing an in-place run ... dirty working tree` | commit or stash first, or ask for a review branch |
 | Refuses to finalize | read the reason it gives; something changed after the tests ran |
 
 ---
@@ -124,23 +136,10 @@ agent-duet runs                              # every run, newest first
 agent-duet logs <run-id>                     # everything about one run
 ```
 
-Three things worth confirming the first time:
+Two things worth confirming the first time:
 
-**1. Nothing was committed or pushed behind your back.**
-
-```bash
-git -C ~/duet-demo/smoke log --oneline
-```
-
-Still one commit. The run edits files, but only `duet_finalize` commits, and only after
-you say yes.
-
-If you want the run kept out of your checkout entirely, ask for a review branch when you
-start it — then your working copy stays untouched and the work lands on its own branch
-for you to merge.
-
-**2. The run survives you closing the session.** Close Claude Code completely, open a
-new session anywhere, and ask:
+**1. The run survives you closing the session.** Close Claude Code completely, open a new
+session anywhere, and ask:
 
 ```
 Call duet_status for run <run-id>.
@@ -148,6 +147,6 @@ Call duet_status for run <run-id>.
 
 Same run, still going. It does not belong to the session that started it.
 
-**3. The reviewer really was read-only.** Look for `codex_readonly_verified: true` in the
+**2. The reviewer really was read-only.** Look for `codex_readonly_verified: true` in the
 evidence. agent-duet fingerprints the code before and after the review and compares — so
 that is measured, not claimed.

@@ -317,6 +317,11 @@ branch does not match; the remote URL does not match both your request **and** t
 recorded when the run started; the validated git tree changed; a coordination artifact is
 present; or a changed file contains credential-shaped content.
 
+A refusal commits nothing and leaves the run at `AWAITING_FINALIZE`, so it is recoverable.
+It names the file and, where it can, the exact line and the rule that fired — go read that
+line rather than guessing. A real secret has to come out of the file; a variable that
+merely reads like one just has to be renamed. Then finalize again with the same arguments.
+
 ---
 
 ## 8. Two-machine rules
