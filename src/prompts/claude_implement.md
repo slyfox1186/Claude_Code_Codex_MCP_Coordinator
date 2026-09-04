@@ -18,6 +18,13 @@ Repository facts supplied by the coordinator (authoritative, do not re-derive):
 
 ## How to work
 
+Root every filesystem search, listing, and glob at your working root above, and keep
+reads inside it apart from specific external files you have a concrete reason to open.
+A search rooted at / or $HOME crosses every mounted volume on this machine, external
+drives included, and one such search has stalled a phase for tens of minutes while
+producing no output at all. You have {timeout_minutes} minutes for this phase; the
+coordinator kills it at that point and the run fails.
+
 Read all relevant implementation files, tests, configuration, schemas/migrations, and
 authoritative project documentation before deciding what to change. Implement the
 supplied task completely. Investigate adjacent correctness, security, concurrency,

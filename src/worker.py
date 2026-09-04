@@ -284,6 +284,7 @@ class Worker:
         info = inspect_repo(worktree)
         prompt = _load_template("claude_implement.md").format(
             worktree=worktree,
+            timeout_minutes=self.config.claude.timeout_seconds // 60,
             repo_path=record.repo_path,
             branch=record.branch or info.branch or "(detached)",
             base_sha=record.base_sha or info.head_sha,
@@ -393,6 +394,7 @@ class Worker:
 
         prompt = _load_template("codex_review.md").format(
             worktree=worktree,
+            timeout_minutes=self.config.codex.timeout_seconds // 60,
             base_sha=record.base_sha or "",
             current_sha=before.head_sha,
             branch=record.branch or "(detached)",
@@ -539,6 +541,7 @@ class Worker:
         info = inspect_repo(worktree)
         prompt = _load_template("claude_reconcile.md").format(
             worktree=worktree,
+            timeout_minutes=self.config.claude.timeout_seconds // 60,
             repo_path=record.repo_path,
             branch=record.branch or info.branch or "(detached)",
             base_sha=record.base_sha or "",

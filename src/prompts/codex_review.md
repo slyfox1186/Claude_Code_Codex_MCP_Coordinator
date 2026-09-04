@@ -5,6 +5,13 @@ Baseline HEAD: {base_sha}
 Current HEAD: {current_sha}
 Branch: {branch}
 
+Root every filesystem search, listing, and glob at your working root above, and keep
+reads inside it apart from specific external files you have a concrete reason to open.
+A search rooted at / or $HOME crosses every mounted volume on this machine, external
+drives included, and one such search has stalled a phase for tens of minutes while
+producing no output at all. You have {timeout_minutes} minutes for this phase; the
+coordinator kills it at that point and the run fails.
+
 Read ./{handoff_filename}, relevant project instructions and documentation, the
 baseline/current git state, and every changed or directly affected file. Verify the
 implementer's claims against code and evidence. Inspect surrounding architecture where
