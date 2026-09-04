@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -28,7 +29,7 @@ from agent_duet.server import (
     _worker_vanished,
     create_run,
 )
-from agent_duet.state import StateStore
+from agent_duet.state import StateError, StateStore
 from agent_duet.worker import Worker
 
 from helpers import git
@@ -659,3 +660,69 @@ def test_runs_listing_reports_whether_the_worker_is_still_alive(config, store, r
 
     store.transition(record.run_id, Phase.CANCELLED, reason="done")
     assert _worker_state(store.get(record.run_id)) == "-"
+
+
+# ---------------------------------------------------------------------------
+# gc forgot the database row and git's worktree registration
+# ---------------------------------------------------------------------------
+
+
+def test_gc_forgets_the_row_of_a_run_whose_artifacts_are_already_gone(
+    config, store, repo, capsys
+):
+    """A row used to outlive its artifacts and haunt ``agent-duet runs`` forever.
+
+    gc only ever looked at directories, so once the run directory was gone -- deleted by
+    hand, or with the repository it belonged to -- the run became invisible to gc and
+    permanent in the listing, pointing at a repository that may no longer exist.
+    """
+    from agent_duet.server import gc
+
+    record = start(config, store, repo)
+    store.transition(record.run_id, Phase.CANCELLED, reason="done")
+    shutil.rmtree(record.run_dir, ignore_errors=True)
+
+    assert gc(0, apply=False, config_path=config.source_path) == 0
+    assert "no artifacts left on disk" in capsys.readouterr().out
+    assert store.get(record.run_id).run_id == record.run_id, "dry run must not delete"
+
+    assert gc(0, apply=True, config_path=config.source_path) == 0
+    assert "forgot 1 run(s)" in capsys.readouterr().out
+    with pytest.raises(StateError):
+        store.get(record.run_id)
+
+
+def test_gc_never_forgets_a_run_that_is_still_going(config, store, repo, capsys):
+    """The cutoff is by age, and a long-running run is old. Terminality is the guard."""
+    from agent_duet.server import gc
+
+    record = start(config, store, repo)
+    store.transition(record.run_id, Phase.CLAUDE_IMPLEMENTING, reason="started")
+
+    assert gc(0, apply=True, config_path=config.source_path) == 0
+    assert "nothing older than the cutoff" in capsys.readouterr().out
+    assert store.get(record.run_id).phase is Phase.CLAUDE_IMPLEMENTING
+    assert store.delete_runs([record.run_id]) == 0, "delete_runs refuses a live run too"
+
+
+def test_gc_unregisters_the_worktree_instead_of_orphaning_it(config, store, repo, capsys):
+    """Deleting a worktree directory behind git's back rots the real repository.
+
+    git keeps a registration under ``.git/worktrees`` for every worktree it created.
+    rmtree leaves that entry pointing at nothing, and it stays there for the life of the
+    repository -- so ``git worktree list`` accumulates dead entries no one ever prunes.
+    """
+    from agent_duet.git_guard import add_worktree, run_git
+    from agent_duet.server import gc
+
+    record = start(config, store, repo)
+    worktree = config.worktrees_dir / f"{repo.name}-{record.run_id[:8]}" / record.run_id[:8]
+    add_worktree(repo, worktree, record.branch, record.base_sha)
+    store.update(record.run_id, worktree=str(worktree))
+    store.transition(record.run_id, Phase.CANCELLED, reason="done")
+    assert str(worktree) in run_git(["worktree", "list"], cwd=repo).stdout
+
+    assert gc(0, apply=True, config_path=config.source_path) == 0
+    capsys.readouterr()
+    assert not worktree.exists()
+    assert str(worktree) not in run_git(["worktree", "list"], cwd=repo).stdout

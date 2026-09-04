@@ -12,7 +12,7 @@ import json
 import os
 import sqlite3
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -516,6 +516,30 @@ class StateStore:
     def request_cancel(self, run_id: str | UUID) -> RunRecord:
         """Set the cooperative cancel flag; the worker polls it between steps."""
         return self.update(run_id, cancel_requested=True)
+
+    def delete_runs(self, run_ids: Sequence[str]) -> int:
+        """Forget these runs entirely: their rows and their event history.
+
+        Only ``gc`` calls this, and only for terminal runs past its cutoff. Without it
+        the listing grows forever -- a row whose artifacts are long gone still shows up
+        in ``agent-duet runs``, pointing at a repository that may no longer exist. It
+        refuses to touch a non-terminal run so a live run can never be erased out from
+        under its worker.
+        """
+        if not run_ids:
+            return 0
+        deleted = 0
+        with self.transaction() as conn:
+            for run_id in run_ids:
+                row = conn.execute(
+                    "SELECT terminal FROM runs WHERE run_id = ?", (run_id,)
+                ).fetchone()
+                if row is None or not row["terminal"]:
+                    continue
+                conn.execute("DELETE FROM events WHERE run_id = ?", (run_id,))
+                conn.execute("DELETE FROM runs WHERE run_id = ?", (run_id,))
+                deleted += 1
+        return deleted
 
     def wait_for_change(
         self, run_id: str | UUID, *, since: str, timeout_seconds: int

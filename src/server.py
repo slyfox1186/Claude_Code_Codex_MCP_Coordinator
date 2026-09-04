@@ -40,8 +40,10 @@ from .git_guard import (
     lock_path_for,
     normalize_remote_url,
     owned_tree_sha,
+    prune_worktrees,
     push_branch,
     remote_sha,
+    remove_worktree,
     repo_lock,
     run_git,
     stage_paths,
@@ -1233,13 +1235,24 @@ def doctor(config_path: Path | None = None) -> int:
 
 
 def gc(older_than_days: int, *, apply: bool = False, config_path: Path | None = None) -> int:
-    """List, and optionally remove, terminal-run artifacts older than N days."""
+    """List, and optionally remove, everything a terminal run older than N days left behind.
+
+    That is three separate leaks, not one. The artifact directories are the obvious one.
+    The second is git's own worktree registration: deleting a worktree directory without
+    telling git leaves a stale entry in the real repository forever. The third is the
+    database row, which used to outlive its artifacts and keep showing up in
+    ``agent-duet runs`` pointing at a repository that may no longer exist.
+
+    Branches are the deliberate exception. A run's branch holds its work, so this reports
+    the ones it is orphaning and leaves deleting them to a person.
+    """
     from datetime import timedelta
 
     config = load_config(config_path)
     store = StateStore(config.db_path)
     cutoff = datetime.now(UTC) - timedelta(days=older_than_days)
-    targets: list[tuple[str, Path]] = []
+
+    expired: list[RunRecord] = []
     for record in store.all_runs():
         if not record.terminal:
             continue
@@ -1247,33 +1260,69 @@ def gc(older_than_days: int, *, apply: bool = False, config_path: Path | None = 
             updated = datetime.fromisoformat(record.updated_at)
         except ValueError:
             continue
-        if updated >= cutoff:
-            continue
-        run_dir = Path(record.run_dir)
-        if run_dir.is_dir() and config.runs_dir in run_dir.parents:
-            targets.append((record.run_id, run_dir))
-        worktree = Path(record.worktree) if record.worktree else None
-        if worktree and worktree.is_dir() and config.worktrees_dir in worktree.parents:
-            targets.append((record.run_id, worktree))
+        if updated < cutoff:
+            expired.append(record)
 
-    if not targets:
+    if not expired:
         print("gc: nothing older than the cutoff")
         return 0
-    print(f"gc: {len(targets)} target(s) older than {older_than_days} day(s):")
-    for run_id, path in targets:
-        print(f"  {run_id}  {path}")
+
+    def _removable(raw: str | None, root: Path) -> Path | None:
+        """A path is only removable if it still exists *and* sits under our own root."""
+        if not raw:
+            return None
+        path = Path(raw)
+        return path if path.is_dir() and root in path.parents else None
+
+    print(f"gc: {len(expired)} run(s) older than {older_than_days} day(s):")
+    for record in expired:
+        paths = [
+            p
+            for p in (
+                _removable(record.run_dir, config.runs_dir),
+                _removable(record.worktree, config.worktrees_dir),
+            )
+            if p is not None
+        ]
+        detail = ", ".join(str(p) for p in paths) or "no artifacts left on disk"
+        print(f"  {record.run_id}  {record.phase.value}  {detail}")
+        if record.branch and Path(record.repo_path).is_dir():
+            print(
+                f"      leaves branch {record.branch} in {record.repo_path} "
+                "(not deleted; it holds the run's work)"
+            )
     if not apply:
-        print("gc: dry run. Re-run with --apply to remove exactly these paths.")
+        print("gc: dry run. Re-run with --apply to remove exactly these.")
         return 0
 
     import shutil
 
-    for _run_id, path in targets:
-        if config.runs_dir in path.parents or config.worktrees_dir in path.parents:
-            shutil.rmtree(path, ignore_errors=True)
-            print(f"gc: removed {path}")
-        else:  # pragma: no cover - the guard above already excludes this
-            print(f"gc: refused {path} (outside the state directory)")
+    pruned: set[Path] = set()
+    for record in expired:
+        run_dir = _removable(record.run_dir, config.runs_dir)
+        if run_dir is not None:
+            shutil.rmtree(run_dir, ignore_errors=True)
+            print(f"gc: removed {run_dir}")
+        worktree = _removable(record.worktree, config.worktrees_dir)
+        if worktree is not None:
+            repo = Path(record.repo_path)
+            # Ask git first so the registration goes with the directory. Falling back to
+            # rmtree + prune covers a worktree git can no longer reach -- a moved or
+            # deleted origin repository, which is exactly when this rots unnoticed.
+            removed = (
+                remove_worktree(repo, worktree, force=True)
+                if repo.is_dir()
+                else None
+            )
+            if removed is None or not removed.ok:
+                shutil.rmtree(worktree, ignore_errors=True)
+            print(f"gc: removed {worktree}")
+            if repo.is_dir() and repo not in pruned:
+                prune_worktrees(repo)
+                pruned.add(repo)
+
+    forgotten = store.delete_runs([record.run_id for record in expired])
+    print(f"gc: forgot {forgotten} run(s) from the database")
     return 0
 
 
