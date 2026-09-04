@@ -621,3 +621,41 @@ def test_a_repo_with_validation_commands_is_not_flagged_unvalidated(
     assert final.evidence["unvalidated"] is False
     assert len(final.evidence["validations"]) == 1
     assert "all 1 configured validation(s) passed" in final.summary
+
+
+# --- "is it still running?" must be answerable from a shell --------------------
+
+
+def test_runs_listing_reports_whether_the_worker_is_still_alive(config, store, repo):
+    """A client session dying is the moment this question gets asked.
+
+    The worker is detached and outlives its session, but the phase alone cannot show
+    that: a crashed run sits at its last phase forever, looking identical to one that
+    is still working.
+    """
+    from agent_duet.diagnostics import _worker_state
+
+    record = start(config, store, repo)
+    assert _worker_state(record) == "?", "no recorded pid yet"
+
+    store.transition(record.run_id, Phase.CLAUDE_IMPLEMENTING, reason="started")
+    live = store.update(record.run_id, worker_pid=os.getpid(), worker_start_ticks=None)
+    assert _worker_state(live) == "alive"
+
+    dead = store.update(record.run_id, worker_pid=999_999_999, worker_start_ticks=None)
+    assert _worker_state(dead) == "DEAD"
+
+    for phase in (
+        Phase.HANDOFF_VALIDATING,
+        Phase.CODEX_REVIEWING,
+        Phase.REVIEW_INTEGRITY_CHECK,
+        Phase.CLAUDE_RECONCILING,
+        Phase.FINAL_VALIDATING,
+        Phase.AWAITING_FINALIZE,
+    ):
+        store.transition(record.run_id, phase, reason="driven by the test")
+    waiting = store.get(record.run_id)
+    assert _worker_state(waiting) == "you", "AWAITING_FINALIZE has no worker by design"
+
+    store.transition(record.run_id, Phase.CANCELLED, reason="done")
+    assert _worker_state(store.get(record.run_id)) == "-"

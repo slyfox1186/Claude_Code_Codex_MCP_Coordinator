@@ -16,8 +16,10 @@ from pathlib import Path
 from . import __version__
 from .config import Config, ConfigError, load_config
 from .logging_setup import default_state_dir, log_dir
+from .models import Phase
+from .process_guard import process_alive
 from .redact import redact
-from .state import StateStore
+from .state import RunRecord, StateStore
 
 SEPARATOR = "=" * 78
 
@@ -67,13 +69,33 @@ def list_runs(config_path: Path | None = None) -> int:
     if not runs:
         print("no runs recorded")
         return 0
-    print(f"{'RUN ID':38} {'PHASE':22} {'UPDATED':21} REPO / BRANCH")
+    print(f"{'RUN ID':38} {'PHASE':22} {'WORKER':9} {'UPDATED':21} REPO / BRANCH")
     for record in runs:
         print(
-            f"{record.run_id:38} {record.phase.value:22} {record.updated_at:21} "
+            f"{record.run_id:38} {record.phase.value:22} {_worker_state(record):9} "
+            f"{record.updated_at:21} "
             f"{Path(record.repo_path).name} / {record.branch or '-'}"
         )
     return 0
+
+
+def _worker_state(record: RunRecord) -> str:
+    """Say whether a run is actually still being worked on.
+
+    "Is it still running?" is the first question after a client session dies, and the
+    phase alone cannot answer it: a crashed run sits at its last phase forever. The
+    worker is detached and outlives the session that started it, so a live answer here
+    is the difference between waiting and assuming the worst.
+    """
+    if record.terminal:
+        return "-"
+    if record.phase is Phase.AWAITING_FINALIZE:
+        return "you"  # No worker by design; it is waiting on a person.
+    if not record.worker_pid:
+        return "?"
+    if process_alive(record.worker_pid, record.worker_start_ticks):
+        return "alive"
+    return "DEAD"
 
 
 def show_logs(
