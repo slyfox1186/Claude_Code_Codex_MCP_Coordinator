@@ -89,3 +89,60 @@ def test_scan_reports_findings_without_echoing_them():
 
 def test_scan_is_quiet_on_clean_text():
     assert scan_for_secrets("just some ordinary prose about tokens of appreciation") == []
+
+
+# --- Ordinary code that merely reads like a credential -----------------------------
+#
+# These are not style preferences. Every one of them refuses a commit if it matches,
+# because `scan_for_secrets` gates `duet_finalize`. The first two are verbatim from the
+# run that hit this on 2026-09-04: a PowerShell installer could not be published because
+# a parser variable is called `$tokens`.
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "    $tokens = $null",
+        "    $tokens = @($Value.Split(','))",
+        "    $parseErrors = $null",
+        "password_field: str = ''",
+        "self.api_key = None",
+        "token = self.next_token()",
+        "let secretIndex = 0;",
+        "credentials = get_credentials()",
+        "TOKEN_RE = re.compile(r'[a-z]+')",
+        "access_key: Optional[str]",
+        "$env:PATH = $originalPath",
+        'password = ""',
+        "bearer = false",
+    ],
+)
+def test_code_that_only_looks_like_a_secret_stays_committable(line):
+    assert scan_for_secrets(line) == [], line
+    assert redact(line) == line, line
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "GITHUB_TOKEN=ghp_" + "A" * 36,
+        'api_key: "sk-abcdefghijklmnopqrstuvwx"',
+        "password = s3cr3tP4ssw0rdValue",
+        "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        "my-access-key = 'aGVsbG8gd29ybGQgc2VjcmV0'",
+    ],
+)
+def test_a_real_credential_is_still_caught(line):
+    assert scan_for_secrets(line), line
+    assert MASK in redact(line), line
+
+
+def test_a_finding_names_the_rule_and_the_line_a_person_should_open():
+    findings = scan_for_secrets("clean\nclean\ntoken: ghp_" + "A" * 36)
+    assert findings == ["line 3 looks like a GitHub token"]
+
+
+def test_a_finding_in_a_later_chunk_reports_its_line_in_the_file():
+    """A file scanned in pieces still reports file lines, not window lines."""
+    findings = scan_for_secrets("token: ghp_" + "A" * 36, line_offset=5_000)
+    assert findings == ["line 5001 looks like a GitHub token"]

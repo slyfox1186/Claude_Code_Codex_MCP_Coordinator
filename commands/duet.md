@@ -87,14 +87,34 @@ Restate the final task and acceptance criteria in one short block before calling
    SHA, the remote SHA, and the deployment status verbatim. If deployment says
    `NOT_CHECKED`, say `NOT_CHECKED` — never describe it as deployed or healthy.
 
+7. **If `duet_finalize` refuses**, it has committed nothing and the run is still at
+   `AWAITING_FINALIZE`. The refusal names a file and a reason, and most of them name a
+   line. That is a task for you, not a question for the user: go read what it points at
+   in the run's worktree, then act.
+
+   - *Credential-shaped content.* Read the line. If it is a real secret, remove it from
+     the file and say what you removed. If it is ordinary code that merely reads like a
+     credential, reword it so it no longer does — renaming a variable is usually enough —
+     and say what you changed and why it was a false alarm.
+   - *A coordination artifact is still present.* Delete it from the worktree; it is
+     agent-duet's own scratch file and was never part of the change.
+   - *The content changed after validation.* Something edited the worktree after the run
+     validated it. Say what differs and stop; re-validating is not yours to fake.
+
+   After a fix you made in the worktree, call `duet_finalize` again with the same
+   arguments. Do not ask for approval a second time — you already have it for this
+   change. Report the fix and the result together.
+
 ## Boundaries
 
 - `duet_start` never commits, pushes, or deploys. `duet_finalize` is the only tool that
   publishes, and it requires explicit approval.
 - Report only what the tools returned. Do not infer that something succeeded because a
   phase advanced, and never restate a model's claim as evidence.
-- If a run fails, report the phase it failed in and the error verbatim, then stop. Do not
-  retry automatically — a failure usually means something about the repository or the
-  environment needs a human decision.
+- If a *run* fails — a phase errors out, or `duet_status` reports `FAILED` — report the
+  phase and the error verbatim, then stop. Do not retry automatically; that usually means
+  something about the repository or the environment needs a human decision. A
+  `duet_finalize` refusal is not this: it is a guard telling you exactly what to look at,
+  and step 7 says to look.
 - If the user closes the session, the run keeps going. To pick it back up later, call
   `duet_status` with the `run_id`.

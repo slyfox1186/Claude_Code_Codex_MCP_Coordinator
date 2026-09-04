@@ -234,13 +234,19 @@ def test_commit_scan_refuses_a_fifo(tmp_path):
 
 
 def test_commit_scan_finds_a_secret_past_the_first_megabyte(tmp_path):
-    """The scan streams the whole file; a prefix-only scan would miss this."""
+    """The scan streams the whole file; a prefix-only scan would miss this.
+
+    The reported line is the line *in the file*. It is read by whoever has to go look at
+    it, so a number relative to the 1MB window that happened to contain the match would
+    send them to the wrong place -- silently, and only in files big enough to chunk.
+    """
     padding = "# pad\n" * 300_000
     (tmp_path / "big.py").write_text(padding + 'TOKEN = "ghp_' + "A" * 36 + '"\n')
     assert (tmp_path / "big.py").stat().st_size > 1 << 20
     report = scan_commit_set(tmp_path, ["big.py"])
     assert not report.safe
-    assert any("credential-shaped" in item for item in report.refusals)
+    assert any("looks like a GitHub token" in item for item in report.refusals)
+    assert any("line 300001 " in item for item in report.refusals)
 
 
 def test_commit_scan_matches_a_secret_across_a_chunk_boundary(tmp_path):

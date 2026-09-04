@@ -281,7 +281,9 @@ def test_finalize_refuses_a_credential_in_the_commit_set(
 ):
     monkeypatch.setenv("FAKE_CLAUDE_BEHAVIOR", "secret")
     record = ready_run(config, store, repo)
-    with pytest.raises(ToolError, match="credential-shaped"):
+    # The message has to name the rule and the line, because the operator's next move is
+    # to open that line and decide whether it is a real secret or a variable named badly.
+    with pytest.raises(ToolError, match=r"line \d+ looks like"):
         finalize(record, bare_remote)
     listed = git("ls-remote", str(bare_remote), f"refs/heads/{record.branch}", cwd=repo)
     assert listed.stdout.strip() == ""

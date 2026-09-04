@@ -275,7 +275,11 @@ def scan_commit_set(worktree: Path, paths: list[str]) -> CommitSafetyReport:
             refusals.append(f"{rel} contains binary content; refusing to commit it blind")
             continue
         if findings:
-            refusals.append(f"{rel} contains credential-shaped content ({findings[0]})")
+            refusals.append(
+                f"{rel}: {findings[0]}. Open that line in the worktree and judge it: a "
+                "real secret has to come out of the file, a false alarm just has to be "
+                "reworded so it no longer reads as one. Then finalize again."
+            )
             continue
         if stat.st_mode & 0o111:
             warnings.append(f"{rel} is executable")
@@ -292,6 +296,10 @@ def _scan_file(path: Path) -> tuple[bool, list[str]]:
     """Stream ``path``; return (looks_binary, secret findings) over its entire contents."""
     findings: list[str] = []
     carry = ""
+    # Lines already behind us. A finding has to name its line in the *file*; without
+    # this it would name its line in whichever 1MB window happened to contain it, and
+    # the refusal would send a reader to the wrong place in any file over the chunk size.
+    line_offset = 0
     try:
         with path.open("rb") as handle:
             while True:
@@ -301,11 +309,13 @@ def _scan_file(path: Path) -> tuple[bool, list[str]]:
                 if _BINARY_HINT.search(chunk):
                     return True, []
                 text = carry + chunk.decode("utf-8", errors="replace")
-                found = scan_for_secrets(text)
+                found = scan_for_secrets(text, line_offset=line_offset)
                 if found:
                     findings.extend(found)
                     return False, findings
                 carry = text[-_SCAN_OVERLAP:]
+                # Only the lines the carry does not repeat are truly consumed.
+                line_offset += text.count("\n", 0, len(text) - len(carry))
     except OSError as exc:
         return False, [f"unreadable: {exc}"]
     return False, findings
