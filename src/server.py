@@ -1341,7 +1341,7 @@ def _status_with_liveness(record: RunRecord) -> RunStatus:
         status.summary = status.liveness.detail
         status.next_action = (
             "Call duet_cancel again to retry cleanup. Do not start another run until the "
-            "recorded child is confirmed gone."
+            "recorded run processes are confirmed gone."
         )
         return status
     if status.liveness.state != "WORKER_MISSING":

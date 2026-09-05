@@ -532,7 +532,9 @@ def test_terminal_status_requires_cleanup_while_its_worker_is_alive(config, stor
 
     assert status.liveness.state == "CLEANUP_REQUIRED"
     assert status.liveness.worker_alive is True
+    assert "worker" in status.liveness.detail
     assert "duet_cancel" in status.next_action
+    assert "recorded run processes" in status.next_action
 
 
 def test_awaiting_finalize_requires_cleanup_while_a_child_is_alive(config, store, repo):

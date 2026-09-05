@@ -55,7 +55,7 @@ Progress is trustworthy only when the returned status has the retained `run_id` 
 `liveness.state` is `MODEL_ACTIVE`. `TRANSITIONING` means the worker is alive but the
 expected model child was not verified at that instant. `WORKER_MISSING` is a failure, not
 a reason to keep polling.
-`CLEANUP_REQUIRED` means the run stopped but a child process remains; retry
+`CLEANUP_REQUIRED` means the run stopped but a worker or child process remains; retry
 `duet_cancel` before starting another run.
 
 Then it **stops** and tells you what it did.

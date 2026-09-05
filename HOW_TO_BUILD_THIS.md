@@ -180,7 +180,7 @@ Each returned status includes a server-measured liveness object. `MODEL_ACTIVE` 
 the detached worker and the expected child model process passed PID/start-time identity
 checks. A live worker without the expected child is `TRANSITIONING`; a vanished worker is
 reported as `WORKER_MISSING`, not repeated indefinitely as an active phase.
-`CLEANUP_REQUIRED` means a terminal run still has a recorded live child; another
+`CLEANUP_REQUIRED` means a stopped run still has a recorded live worker or child; another
 `duet_cancel` retries that cleanup while preserving the process identity until it is gone.
 
 **Checks**

@@ -114,7 +114,7 @@ Restate the final task and acceptance criteria in one short block before calling
    that phase remains active; it does not mean the model was stopped.
 
    If any status returns `CLEANUP_REQUIRED`, follow its `next_action` and retry `duet_cancel`
-   once. Do not start or finalize another run while a recorded child process remains alive.
+   once. Do not start or finalize another run while a recorded run process remains alive.
 
    For a validation phase, say which two model phases it sits between or that final
    validation follows phase 3.

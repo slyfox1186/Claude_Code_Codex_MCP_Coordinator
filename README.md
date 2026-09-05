@@ -222,7 +222,7 @@ Every status also reports server-measured `liveness`: whether the detached worke
 the expected Claude or Codex child process are alive at that instant. `/duet` may call a
 model phase active only when that status belongs to the retained `run_id` and reports
 `MODEL_ACTIVE`; a lost or unknown result is never treated as progress.
-If cleanup could not terminate a recorded child process, status reports
+If cleanup could not terminate a recorded worker or child process, status reports
 `CLEANUP_REQUIRED`; repeating `duet_cancel` retries cleanup instead of forgetting it.
 
 The run survives the client that started it — the worker is detached, so you can close the

@@ -44,7 +44,7 @@ The mutating dead-run repair path terminates the child before releasing the run 
 keeps its identity when cleanup cannot be confirmed.
 An unowned `QUEUED` row becomes `WORKER_MISSING` after a short startup grace period;
 `FINALIZING` is exempt because it runs in the MCP server rather than a detached worker.
-Terminal records with a live child report `CLEANUP_REQUIRED`, and repeated cancellation
+Terminal records with a live worker or child report `CLEANUP_REQUIRED`, and repeated cancellation
 retries cleanup instead of returning a false no-op.
 The same state covers a terminal record with a live worker or an approval-pending record
 with a live child. Finalization independently refuses a live recorded child, so stale model
