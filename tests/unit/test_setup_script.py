@@ -60,6 +60,9 @@ if sys.argv[1:] == ["--version"]:
     )
 
     env = os.environ.copy()
+    for name in tuple(env):
+        if name.startswith("CONDA_"):
+            env.pop(name)
     env.update(
         {
             "HOME": str(home),
@@ -70,13 +73,94 @@ if sys.argv[1:] == ["--version"]:
     return home, env
 
 
+def _write_fake_provider_clis(fake_bin: Path) -> None:
+    _write_executable(
+        fake_bin / "claude",
+        '#!/bin/bash\n[[ "$1" == "--version" ]] && echo "2.1.236 (Claude Code)"\nexit 0\n',
+    )
+    _write_executable(
+        fake_bin / "codex",
+        '#!/bin/bash\n[[ "$1" == "--version" ]] && echo "codex-cli 0.153.2"\nexit 0\n',
+    )
+
+
+def _write_fake_python(path: Path, log: Path) -> None:
+    _write_executable(
+        path,
+        f"""#!/bin/bash
+printf '%s %s\\n' "$0" "$*" >> "{log}"
+if [[ "$1" == "-m" && "$2" == "venv" ]]; then
+    mkdir -p "$3/bin"
+    cp "$0" "$3/bin/python"
+    exit 0
+fi
+if [[ "$1" == "-m" && "$2" == "pip" ]]; then
+    if [[ " $* " == *" --editable "* ]]; then
+        printf '#!%s\\nimport sys\\n' "$0" > "$(dirname "$0")/agent-duet"
+        chmod 755 "$(dirname "$0")/agent-duet"
+    fi
+    exit 0
+fi
+exec {REAL_PYTHON} "$@"
+""",
+    )
+
+
+def _python_setup_environment(
+    tmp_path: Path, *, with_conda: bool
+) -> tuple[Path, Path, Path, dict[str, str]]:
+    home = tmp_path / "home"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(parents=True)
+    home.mkdir()
+    python_log = tmp_path / "python.log"
+    conda_log = tmp_path / "conda.log"
+    template = tmp_path / "python-template"
+
+    _write_fake_provider_clis(fake_bin)
+    _write_fake_python(template, python_log)
+    _write_fake_python(fake_bin / "python3", python_log)
+    if with_conda:
+        conda_base = home / "miniconda3"
+        (conda_base / "bin").mkdir(parents=True)
+        _write_executable(
+            conda_base / "bin" / "conda",
+            f"""#!/bin/bash
+printf '%s\\n' "$*" >> "{conda_log}"
+if [[ "$1" == "info" && "$2" == "--base" ]]; then
+    echo "{conda_base}"
+    exit 0
+fi
+if [[ "$1" == "create" || "$1" == "install" ]]; then
+    mkdir -p "{conda_base}/envs/agent-duet/bin"
+    cp "{template}" "{conda_base}/envs/agent-duet/bin/python"
+    exit 0
+fi
+exit 1
+""",
+        )
+
+    env = os.environ.copy()
+    for name in tuple(env):
+        if name.startswith("CONDA_"):
+            env.pop(name)
+    env.update(
+        {
+            "HOME": str(home),
+            "PATH": f"{fake_bin}:/usr/bin:/bin",
+            "NO_COLOR": "1",
+        }
+    )
+    return home, python_log, conda_log, env
+
+
 def _run_interactive_setup(
-    *, cwd: Path, env: dict[str, str], answers: str
+    *, cwd: Path, env: dict[str, str], answers: str, args: tuple[str, ...] = ()
 ) -> subprocess.CompletedProcess[str]:
     master, slave = pty.openpty()
     try:
         process = subprocess.Popen(
-            ["bash", str(PROJECT_ROOT / "setup.sh")],
+            ["bash", str(PROJECT_ROOT / "setup.sh"), *args],
             cwd=cwd,
             env=env,
             stdin=slave,
@@ -127,3 +211,103 @@ def test_blank_repository_path_skips_registration(tmp_path: Path) -> None:
     assert "./setup.sh add-repo /path/to/your/project" in result.stdout
     config = (home / ".config/agent-duet/config.toml").read_text()
     assert "\n[[repositories]]\n" not in config
+
+
+def test_detected_conda_creates_only_named_agent_duet_environment(tmp_path: Path) -> None:
+    home, _, conda_log, env = _python_setup_environment(tmp_path, with_conda=True)
+
+    result = _run_interactive_setup(cwd=tmp_path, env=env, answers="y\nn\n\n")
+
+    assert result.returncode == 0, result.stdout
+    assert "dedicated Conda environment named agent-duet" in result.stdout
+    calls = conda_log.read_text()
+    assert "create --name agent-duet" in calls
+    assert "-n base" not in calls
+    assert "--name base" not in calls
+    assert (home / "miniconda3/envs/agent-duet/bin/python").is_file()
+
+
+def test_declining_conda_environment_creation_changes_nothing(tmp_path: Path) -> None:
+    home, _, conda_log, env = _python_setup_environment(tmp_path, with_conda=True)
+
+    result = _run_interactive_setup(cwd=tmp_path, env=env, answers="n\n\n")
+
+    assert result.returncode == 2, result.stdout
+    assert "installation not completed" in result.stdout
+    calls = conda_log.read_text() if conda_log.exists() else ""
+    assert "create" not in calls
+    assert "install" not in calls
+    assert not (home / "miniconda3/envs/agent-duet").exists()
+
+
+def test_system_python_creates_private_environment_without_conda(tmp_path: Path) -> None:
+    home, python_log, _, env = _python_setup_environment(tmp_path, with_conda=False)
+
+    result = _run_interactive_setup(cwd=tmp_path, env=env, answers="y\nn\n\n")
+
+    assert result.returncode == 0, result.stdout
+    managed_python = home / ".local/share/agent-duet/venv/bin/python"
+    assert "private Python environment" in result.stdout
+    assert managed_python.is_file()
+    calls = python_log.read_text().splitlines()
+    system_python = tmp_path / "bin/python3"
+    assert any(call == f"{system_python} -m venv {managed_python.parents[1]}" for call in calls)
+    pip_calls = [call for call in calls if " -m pip " in call]
+    assert pip_calls
+    assert all(call.startswith(f"{managed_python} ") for call in pip_calls)
+    assert "Miniconda" not in result.stdout
+
+
+def test_existing_named_conda_environment_is_reused(tmp_path: Path) -> None:
+    home, _, conda_log, env = _python_setup_environment(tmp_path, with_conda=True)
+    env_python = home / "miniconda3/envs/agent-duet/bin/python"
+    env_python.parent.mkdir(parents=True)
+    _write_fake_python(env_python, tmp_path / "existing-python.log")
+
+    result = _run_interactive_setup(cwd=tmp_path, env=env, answers="n\n\n")
+
+    assert result.returncode == 0, result.stdout
+    assert "using existing dedicated Conda environment" in result.stdout
+    calls = conda_log.read_text()
+    assert "create" not in calls
+    assert "install" not in calls
+
+
+def test_repair_targets_only_existing_named_conda_environment(tmp_path: Path) -> None:
+    home, _, conda_log, env = _python_setup_environment(tmp_path, with_conda=True)
+    (home / "miniconda3/envs/agent-duet").mkdir(parents=True)
+
+    result = _run_interactive_setup(cwd=tmp_path, env=env, answers="y\nn\n\n")
+
+    assert result.returncode == 0, result.stdout
+    calls = conda_log.read_text()
+    assert "install --name agent-duet" in calls
+    assert "-n base" not in calls
+    assert "--name base" not in calls
+
+
+def test_old_system_python_does_not_trigger_conda_install(tmp_path: Path) -> None:
+    _, _, _, env = _python_setup_environment(tmp_path, with_conda=False)
+    _write_executable(tmp_path / "bin/python3", "#!/bin/bash\nexit 1\n")
+
+    result = _run_interactive_setup(cwd=tmp_path, env=env, answers="")
+
+    assert result.returncode == 1, result.stdout
+    assert "Install Python 3.13 or newer" in result.stdout
+    assert "Miniconda" not in result.stdout
+
+
+def test_install_repair_does_not_create_or_modify_python_environment(tmp_path: Path) -> None:
+    home, python_log, conda_log, env = _python_setup_environment(tmp_path, with_conda=True)
+
+    result = _run_interactive_setup(cwd=tmp_path, env=env, answers="", args=("install",))
+
+    assert result.returncode == 1, result.stdout
+    assert "run ./setup.sh first" in result.stdout
+    calls = conda_log.read_text() if conda_log.exists() else ""
+    assert "create" not in calls
+    assert "install" not in calls
+    python_calls = python_log.read_text().splitlines() if python_log.exists() else []
+    pip_calls = [line for line in python_calls if " -m pip " in line]
+    assert not pip_calls
+    assert not (home / ".local/share/agent-duet/venv").exists()

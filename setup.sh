@@ -20,6 +20,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/agent-duet"
 CONFIG_FILE="$CONFIG_DIR/config.toml"
 STATE_DIR="$HOME/.local/state/agent-duet"
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/agent-duet"
+VENV_DIR="$DATA_DIR/venv"
 CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
 CLAUDE_COMMANDS_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/commands"
 DEMO_ROOT="$HOME/duet-demo"
@@ -49,6 +51,19 @@ ask_yes() {  # ask_yes "question" -> 0 for yes
   case "${reply:-y}" in [Nn]*) return 1 ;; *) return 0 ;; esac
 }
 
+ask_consent() {  # Third-party or environment changes default to no.
+  local reply
+  if [ "$ASSUME_YES" = true ]; then return 0; fi
+  if [ ! -t 0 ]; then return 1; fi
+  read -r -p "    $1 [y/N] " reply || true
+  case "$reply" in [Yy]*) return 0 ;; *) return 1 ;; esac
+}
+
+not_completed() {
+  printf '\n%sinstallation not completed.%s Nothing was changed by this step.\n\n' "$Y" "$N" >&2
+  exit 2
+}
+
 prompt_for_repo() {
   local target
   read -r -p "    Project repository path (relative, absolute, or ~/...; blank to skip): " \
@@ -68,21 +83,141 @@ prompt_for_repo() {
 # Everything that touches a .toml file goes through Python, so a config is only
 # ever written after it has been parsed back and checked.
 
+python_is_compatible() {
+  local candidate="$1"
+  [ -x "$candidate" ] || return 1
+  "$candidate" -c 'import sys; raise SystemExit(sys.version_info < (3, 13))' \
+    >/dev/null 2>&1
+}
+
+find_conda() {
+  local candidate=""
+  if [ -n "${CONDA_EXE:-}" ] && [ -x "$CONDA_EXE" ]; then
+    printf '%s\n' "$CONDA_EXE"
+    return 0
+  fi
+  candidate="$(command -v conda 2>/dev/null || true)"
+  if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  if [ -x "$HOME/miniconda3/bin/conda" ]; then
+    printf '%s\n' "$HOME/miniconda3/bin/conda"
+    return 0
+  fi
+  return 1
+}
+
+installed_agent_python() {
+  local bin shebang
+  bin="$(command -v agent-duet 2>/dev/null || true)"
+  [ -n "$bin" ] || return 1
+  shebang="$(head -1 "$bin" 2>/dev/null || true)"
+  case "$shebang" in
+    '#!'*)
+      shebang="${shebang#\#!}"
+      shebang="${shebang%% *}"
+      python_is_compatible "$shebang" || return 1
+      printf '%s\n' "$shebang"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+prepare_python_environment() {
+  local conda_bin conda_base env_python system_python existing_python
+
+  if [ -n "${DUET_PYTHON:-}" ]; then
+    python_is_compatible "$DUET_PYTHON" \
+      || die "$DUET_PYTHON is too old. agent-duet needs Python 3.13 or newer."
+    return 0
+  fi
+
+  conda_bin="$(find_conda || true)"
+  if [ -n "$conda_bin" ]; then
+    conda_base="$("$conda_bin" info --base 2>/dev/null || true)"
+    [ -n "$conda_base" ] || die "Conda was found at $conda_bin, but 'conda info --base' failed."
+    env_python="$conda_base/envs/agent-duet/bin/python"
+    if python_is_compatible "$env_python"; then
+      DUET_PYTHON="$env_python"
+      export DUET_PYTHON
+      ok "using existing dedicated Conda environment: $env_python"
+      return 0
+    fi
+
+    step "Preparing an isolated Python environment"
+    info "Conda was detected. Agent Duet will use a dedicated Conda environment named agent-duet."
+    info "The base environment and every other environment will be left unchanged."
+    if ! ask_consent "Create the dedicated Conda environment now?"; then not_completed; fi
+    if [ -d "$conda_base/envs/agent-duet" ]; then
+      "$conda_bin" install --name agent-duet --yes python=3.13 pip \
+        || die "could not repair the agent-duet Conda environment."
+    else
+      "$conda_bin" create --name agent-duet --yes python=3.13 pip \
+        || die "could not create the agent-duet Conda environment."
+    fi
+    python_is_compatible "$env_python" \
+      || die "Conda finished, but $env_python is not Python 3.13 or newer."
+    DUET_PYTHON="$env_python"
+    export DUET_PYTHON
+    ok "dedicated environment ready: $env_python"
+    return 0
+  fi
+
+  existing_python="$(installed_agent_python || true)"
+  if [ -n "$existing_python" ]; then
+    DUET_PYTHON="$existing_python"
+    export DUET_PYTHON
+    ok "using the existing Agent Duet interpreter: $existing_python"
+    return 0
+  fi
+
+  system_python="$(command -v python3 2>/dev/null || true)"
+  [ -n "$system_python" ] \
+    || die "python3 was not found. Install Python 3.13 or newer, then run ./setup.sh again."
+  python_is_compatible "$system_python" \
+    || die "$system_python is too old. Install Python 3.13 or newer, then run ./setup.sh again."
+
+  env_python="$VENV_DIR/bin/python"
+  if python_is_compatible "$env_python"; then
+    DUET_PYTHON="$env_python"
+    export DUET_PYTHON
+    ok "using existing private Python environment: $env_python"
+    return 0
+  fi
+
+  step "Preparing an isolated Python environment"
+  info "Conda was not found. Agent Duet will create a private Python environment at:"
+  info "  $VENV_DIR"
+  info "System Python packages will be left unchanged."
+  if ! ask_consent "Create the private Python environment now?"; then not_completed; fi
+  mkdir -p "$DATA_DIR"
+  "$system_python" -m venv "$VENV_DIR" \
+    || die "Python could not create a virtual environment. Install its venv support and retry."
+  python_is_compatible "$env_python" \
+    || die "the private environment was created without Python 3.13 or newer."
+  DUET_PYTHON="$env_python"
+  export DUET_PYTHON
+  ok "private environment ready: $env_python"
+}
+
 pick_python() {
   if [ -n "${DUET_PYTHON:-}" ]; then echo "$DUET_PYTHON"; return; fi
-  local bin shebang
-  if bin="$(command -v agent-duet 2>/dev/null)"; then
-    shebang="$(head -1 "$bin" 2>/dev/null || true)"
-    case "$shebang" in
-      '#!'*) shebang="${shebang#\#!}"; shebang="${shebang%% *}"
-             if [ -x "$shebang" ]; then echo "$shebang"; return; fi ;;
-    esac
+  local bin conda_bin conda_base
+  conda_bin="$(find_conda || true)"
+  if [ -n "$conda_bin" ]; then
+    conda_base="$("$conda_bin" info --base 2>/dev/null || true)"
+    bin="$conda_base/envs/agent-duet/bin/python"
+    if python_is_compatible "$bin"; then echo "$bin"; return; fi
+    die "the dedicated Python environment is missing; run ./setup.sh first."
   fi
-  for bin in "$HOME/miniconda3/bin/python3" "$HOME/miniconda3/bin/python" \
-             "$(command -v python3 2>/dev/null || true)"; do
-    if [ -n "$bin" ] && [ -x "$bin" ]; then echo "$bin"; return; fi
-  done
-  die "no Python 3.13 found. Install one, or set DUET_PYTHON=/path/to/python."
+  if python_is_compatible "$VENV_DIR/bin/python"; then
+    echo "$VENV_DIR/bin/python"
+    return
+  fi
+  bin="$(installed_agent_python || true)"
+  if [ -n "$bin" ]; then echo "$bin"; return; fi
+  die "the private Python environment is missing; run ./setup.sh first."
 }
 
 require_python_version() {
@@ -619,6 +754,7 @@ case "${1:-}" in
   demo)        do_demo "${2:-}" ;;
   uninstall)   do_uninstall ;;
   "")
+    prepare_python_environment
     do_install
     if ask_yes "Try it now on a throwaway project?"; then
       do_demo

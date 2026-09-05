@@ -4,7 +4,7 @@
 
 **Goal:** Make `./setup.sh` a consent-based guided bootstrapper and prompt for a real repository after the user declines the demo.
 
-**Architecture:** Keep one public installer. Add focused Bash functions for consent, prerequisite detection and installation, authentication, and repository input; test them through isolated subprocesses with fake commands and temporary homes. Preserve every existing subcommand.
+**Architecture:** Keep one public installer. Add focused Bash functions for consent, isolated Python environment selection, vendor CLI installation, authentication, and repository input; test them through isolated subprocesses with fake commands and temporary homes. Preserve every existing subcommand.
 
 **Tech Stack:** Bash, Miniconda, Python 3.13, pytest, Git, Claude Code CLI, Codex CLI.
 
@@ -59,7 +59,7 @@ fi
 
 Run the focused command from Step 2. Expected: all repository prompt cases PASS.
 
-### Task 2: Add consent-based Miniconda and Python bootstrap
+### Task 2: Add isolated Conda-or-system Python setup
 
 **Files:**
 
@@ -68,21 +68,21 @@ Run the focused command from Step 2. Expected: all repository prompt cases PASS.
 
 - [ ] **Step 1: Write failing tests**
 
-Test that missing Python displays the official Miniconda URL and install target. Refusal must perform no download, print `installation not completed`, and exit 2. Consent and `--yes` must invoke the fake downloader/installer. Existing compatible Python must skip bootstrap. The `install` subcommand must diagnose but never bootstrap. Test unsupported OS/CPU and cleanup after successful and failed fake installers.
+Test that detected Conda offers to create `agent-duet`, records `conda create --name agent-duet`, and never invokes an operation against `base`. Test reuse of a compatible existing named environment and repair of only that environment. Without Conda, test that compatible default `python3` offers a private virtual environment and that pip is never run against the system interpreter. Refusal must print `installation not completed` and exit 2. An old system Python must produce one concise error without offering or downloading Conda. The `install` repair subcommand must not create an environment.
 
 - [ ] **Step 2: Verify RED**
 
 ```bash
-/home/jman/miniconda3/bin/python -m pytest -q tests/unit/test_setup_script.py -k 'prerequisite or miniconda or consent'
+/home/jman/miniconda3/bin/python -m pytest -q tests/unit/test_setup_script.py -k 'python_environment or conda or consent'
 ```
 
-Expected: FAIL because setup currently only diagnoses missing Python.
+Expected: FAIL because setup currently installs directly into whichever interpreter it discovers.
 
-- [ ] **Step 3: Implement prerequisite helpers**
+- [ ] **Step 3: Implement isolated environment selection**
 
-Add `ask_consent` with a conservative `[y/N]` default. Require Linux; support `x86_64` and `aarch64`; select `curl` or `wget`; download the official Miniconda installer into `mktemp -d`; clean it with a trap; install under `$HOME/miniconda3` only after consent.
+Add `ask_consent` with a conservative `[y/N]` default. Honor a compatible `DUET_PYTHON`. Otherwise detect Conda from `CONDA_EXE`, an executable `command -v conda` result, or `$HOME/miniconda3/bin/conda`. Resolve its base path and create or reuse `<base>/envs/agent-duet` using `conda create --name agent-duet -y python=3.13 pip`. If repair is needed, target only `-n agent-duet`.
 
-When that Miniconda base exists but is older than 3.13, warn that its base environment will change and obtain separate consent before running its absolute `conda` executable. Never call `sudo`, a system package manager, system Python, bare `python`, or bare `pip`.
+If Conda is absent, require the default `python3` to be 3.13 or newer and create a private virtual environment at `${XDG_DATA_HOME:-$HOME/.local/share}/agent-duet/venv`. All dependency installation then uses that environment's absolute Python. Never install Conda, call `sudo`, modify `base`, or run pip against system Python.
 
 Call the bootstrap only from the default guided path. Keep `setup.sh install` validation-only.
 
@@ -168,7 +168,7 @@ Expected: all installer tests PASS.
 
 - [ ] **Step 1: Write failing documentation tests**
 
-Assert `INSTALL.md` and README show the clone, cd, and `./setup.sh` commands; disclose consent before Miniconda/Python, Claude Code, or Codex changes; link to `SECURITY.md`; and place normal installation before advanced/manual material.
+Assert `INSTALL.md` and README show the clone, cd, and `./setup.sh` commands; disclose consent before creating the isolated Python environment or installing Claude Code or Codex; state that detected Conda uses a dedicated `agent-duet` environment and is never installed; link to `SECURITY.md`; and place normal installation before advanced/manual material.
 
 - [ ] **Step 2: Verify RED**
 

@@ -32,30 +32,32 @@ complete the provider's flow.
 
 The installer manages user-scoped software only:
 
-- Miniconda under `$HOME/miniconda3` when no compatible Python exists;
-- Python 3.13 in that Miniconda installation when its base interpreter is too old;
+- a dedicated Conda environment named `agent-duet` when Conda is already installed;
+- otherwise, a private virtual environment created from the default `python3` interpreter;
 - Claude Code through Anthropic's official Linux installer;
 - Codex through OpenAI's official Linux installer;
 - Agent Duet, its locked Python dependencies, configuration, MCP registrations, and command files.
 
-It never invokes `sudo`, a system package manager, or a system Python. Git and either `curl` or
-`wget` remain bootstrap requirements because users need a download tool and normally need Git to
-obtain the repository. Missing system-level tools produce one short distro-neutral error.
+It never installs Conda, invokes `sudo`, changes Conda's `base` environment, or installs packages
+into system Python. Git, Python 3.13+, and either `curl` or `wget` remain bootstrap requirements.
+Missing system-level tools produce one short distro-neutral error.
 
-The Miniconda upgrade prompt must warn that it changes the base environment. Declining any
-required prerequisite stops cleanly and prints the one next command or action needed. Declining
-an optional login offer finishes installation but clearly reports that Agent Duet cannot run that
-provider until the user signs in.
+Creating or repairing an isolated Python environment and installing either vendor CLI requires
+consent. Declining a required step stops cleanly and prints the one next command or action needed.
+Declining an optional login offer finishes installation but clearly reports that Agent Duet cannot
+run that provider until the user signs in.
 
 ## Guided Flow
 
-1. Detect Linux, CPU architecture, Git, and a supported download command.
-2. Select `DUET_PYTHON` when supplied, otherwise reuse the existing Agent Duet interpreter or a
-   compatible `$HOME/miniconda3/bin/python`.
-3. If no compatible Python exists, show the official Miniconda source and destination and ask
-   before downloading or installing it. Support `x86_64` and `aarch64`; reject unknown targets.
-4. If Miniconda exists but its base Python is older than 3.13, explain the base-environment change
-   and ask before installing Python 3.13 with that installation's `conda` executable.
+1. Detect Linux, Git, Python 3.13+, and a supported download command.
+2. Honor a compatible `DUET_PYTHON` when explicitly supplied. Otherwise, detect Conda through
+   `CONDA_EXE`, an executable returned by `command -v conda`, or `$HOME/miniconda3/bin/conda`.
+3. When Conda exists, show the exact command and ask before creating a dedicated environment named
+   `agent-duet` with Python 3.13 and pip. Reuse that environment when it is already compatible;
+   repair only that named environment when necessary. Never modify `base` or another environment.
+4. When Conda does not exist, require a compatible default `python3`, show the private environment
+   path, and ask before creating an Agent Duet virtual environment under the user's data directory.
+   Never pass pip operations to the system interpreter itself.
 5. If Claude Code is absent, show Anthropic's official installer URL and ask before running it.
 6. If Codex is absent, show OpenAI's official installer URL and ask before running it.
 7. Check authentication with `claude auth status` and `codex login status`. If either CLI is not
@@ -72,9 +74,9 @@ provider until the user signs in.
     which setup was launched, or a leading `~/` path without using `eval`. Blank input explicitly
     skips repository registration and prints the later `add-repo` command.
 
-Every download goes to a `mktemp -d` directory, uses HTTPS, executes only after consent, and is
-removed on exit. The installer prints the source URL and install target before asking. It never
-logs, copies, or requests an API key.
+Every vendor CLI download goes to a `mktemp -d` directory, uses HTTPS, executes only after consent,
+and is removed on exit. The installer prints the source URL and install target before asking. It
+never logs, copies, or requests an API key.
 
 ## Command Behavior
 
@@ -105,9 +107,9 @@ that setup never prompts or that users must manually preinstall all prerequisite
 
 ## Failure Handling
 
-- Unsupported operating system or architecture: stop before modification and name the supported
-  targets.
-- Missing Git or download command: stop with one concise prerequisite instruction.
+- Unsupported operating system: stop before modification and name Linux as the supported target.
+- Missing Git, Python 3.13+, Python's `venv` support, or a download command: stop with one concise
+  prerequisite instruction.
 - Declined required installation: make no change for that prerequisite, print `installation not
   completed`, and exit with status 2 so callers cannot mistake refusal for a completed install.
 - Download, installer, authentication, pip, registration, or health-check failure: stop at the
@@ -122,8 +124,11 @@ No test may use the network, modify real CLI configuration, or install real pack
 
 The tests must prove:
 
-- a missing prerequisite is never installed after the user declines;
-- consent invokes the correct official installer and resumes detection;
+- a Conda installation is never downloaded or offered;
+- detected Conda creates or reuses only the named `agent-duet` environment and never changes base;
+- without Conda, the default compatible `python3` creates a private Agent Duet virtual environment;
+- an old or incomplete system Python produces a concise error rather than a Conda installation;
+- a required environment is never created after the user declines;
 - `--yes` is treated as explicit consent;
 - `install` remains non-bootstrapping;
 - compatible existing prerequisites are not reinstalled;
@@ -147,5 +152,3 @@ tests for guided acceptance and refusal paths. Inspect the rendered Markdown and
   <https://code.claude.com/docs/en/troubleshoot-install>.
 - OpenAI Codex Linux installation and headless authentication:
   <https://learn.chatgpt.com/docs/codex/cli> and <https://learn.chatgpt.com/docs/auth>.
-- Miniconda user-local Linux installation:
-  <https://www.anaconda.com/docs/getting-started/advanced-install/main>.
