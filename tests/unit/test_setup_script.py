@@ -122,7 +122,7 @@ exec {REAL_PYTHON} "$@"
 
 
 def _python_setup_environment(
-    tmp_path: Path, *, with_conda: bool
+    tmp_path: Path, *, with_conda: bool, conda_environment_root: Path | None = None
 ) -> tuple[Path, Path, Path, dict[str, str]]:
     home = tmp_path / "home"
     fake_bin = tmp_path / "bin"
@@ -137,6 +137,7 @@ def _python_setup_environment(
     _write_fake_python(fake_bin / "python3", python_log)
     if with_conda:
         conda_base = home / "miniconda3"
+        conda_environment = (conda_environment_root or conda_base / "envs") / "agent-duet"
         (conda_base / "bin").mkdir(parents=True)
         _write_executable(
             conda_base / "bin" / "conda",
@@ -146,9 +147,16 @@ if [[ "$1" == "info" && "$2" == "--base" ]]; then
     echo "{conda_base}"
     exit 0
 fi
+if [[ "$1" == "run" && "$2" == "--name" && "$3" == "agent-duet" ]]; then
+    if [[ -x "{conda_environment}/bin/python" ]]; then
+        echo "{conda_environment}/bin/python"
+        exit 0
+    fi
+    exit 1
+fi
 if [[ "$1" == "create" || "$1" == "install" ]]; then
-    mkdir -p "{conda_base}/envs/agent-duet/bin"
-    cp "{template}" "{conda_base}/envs/agent-duet/bin/python"
+    mkdir -p "{conda_environment}/bin"
+    cp "{template}" "{conda_environment}/bin/python"
     exit 0
 fi
 exit 1
@@ -381,9 +389,28 @@ def test_existing_named_conda_environment_is_reused(tmp_path: Path) -> None:
     assert "install" not in calls
 
 
+def test_named_conda_environment_uses_condas_configured_location(tmp_path: Path) -> None:
+    custom_root = tmp_path / "custom-conda-envs"
+    _, python_log, conda_log, env = _python_setup_environment(
+        tmp_path, with_conda=True, conda_environment_root=custom_root
+    )
+
+    result = _run_interactive_setup(cwd=tmp_path, env=env, answers="y\nn\n\n")
+
+    assert result.returncode == 0, result.stdout
+    custom_python = custom_root / "agent-duet/bin/python"
+    assert custom_python.is_file()
+    assert "create --name agent-duet" in conda_log.read_text()
+    pip_calls = [line for line in python_log.read_text().splitlines() if " -m pip " in line]
+    assert pip_calls
+    assert all(call.startswith(f"{custom_python} ") for call in pip_calls)
+
+
 def test_repair_targets_only_existing_named_conda_environment(tmp_path: Path) -> None:
     home, _, conda_log, env = _python_setup_environment(tmp_path, with_conda=True)
-    (home / "miniconda3/envs/agent-duet").mkdir(parents=True)
+    incompatible_python = home / "miniconda3/envs/agent-duet/bin/python"
+    incompatible_python.parent.mkdir(parents=True)
+    _write_executable(incompatible_python, "#!/bin/bash\nexit 1\n")
 
     result = _run_interactive_setup(cwd=tmp_path, env=env, answers="y\nn\n\n")
 

@@ -55,7 +55,9 @@ run that provider until the user signs in.
    `DUET_PYTHON`, so setup cannot install into an unrelated or base environment by accident.
 3. When Conda exists, show the exact command and ask before creating a dedicated environment named
    `agent-duet` with Python 3.13 and pip. Reuse that environment when it is already compatible;
-   repair only that named environment when necessary. Never modify `base` or another environment.
+   repair only that named environment when necessary. Resolve its actual interpreter through
+   `conda run` so configured environment directories work. Never modify `base` or another
+   environment.
 4. When Conda does not exist, honor an explicitly supplied compatible `DUET_PYTHON`; otherwise
    require a compatible default `python3`, show the private environment path, and ask before
    creating an Agent Duet virtual environment under the user's data directory. Never pass pip

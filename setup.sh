@@ -134,15 +134,19 @@ installed_agent_python() {
   esac
 }
 
+conda_agent_python() {
+  local conda_bin="$1"
+  "$conda_bin" run --name agent-duet python -c \
+    'import sys; print(sys.executable, end="")' 2>/dev/null
+}
+
 prepare_python_environment() {
-  local conda_bin conda_base env_python system_python existing_python
+  local conda_bin env_python system_python existing_python
 
   conda_bin="$(find_conda || true)"
   if [ -n "$conda_bin" ]; then
-    conda_base="$("$conda_bin" info --base 2>/dev/null || true)"
-    [ -n "$conda_base" ] || die "Conda was found at $conda_bin, but 'conda info --base' failed."
-    env_python="$conda_base/envs/agent-duet/bin/python"
-    if python_is_compatible "$env_python"; then
+    env_python="$(conda_agent_python "$conda_bin" || true)"
+    if [ -n "$env_python" ] && python_is_compatible "$env_python"; then
       DUET_PYTHON="$env_python"
       export DUET_PYTHON
       ok "using existing dedicated Conda environment: $env_python"
@@ -153,13 +157,16 @@ prepare_python_environment() {
     info "Conda was detected. Agent Duet will use a dedicated Conda environment named agent-duet."
     info "The base environment and every other environment will be left unchanged."
     if ! ask_consent "Create the dedicated Conda environment now?"; then not_completed; fi
-    if [ -d "$conda_base/envs/agent-duet" ]; then
+    if [ -n "$env_python" ]; then
       "$conda_bin" install --name agent-duet --yes python=3.13 pip \
         || die "could not repair the agent-duet Conda environment."
     else
       "$conda_bin" create --name agent-duet --yes python=3.13 pip \
         || die "could not create the agent-duet Conda environment."
     fi
+    env_python="$(conda_agent_python "$conda_bin" || true)"
+    [ -n "$env_python" ] \
+      || die "Conda finished, but the agent-duet environment could not be located."
     python_is_compatible "$env_python" \
       || die "Conda finished, but $env_python is not Python 3.13 or newer."
     DUET_PYTHON="$env_python"
@@ -212,12 +219,11 @@ prepare_python_environment() {
 }
 
 pick_python() {
-  local bin conda_bin conda_base
+  local bin conda_bin
   conda_bin="$(find_conda || true)"
   if [ -n "$conda_bin" ]; then
-    conda_base="$("$conda_bin" info --base 2>/dev/null || true)"
-    bin="$conda_base/envs/agent-duet/bin/python"
-    if python_is_compatible "$bin"; then echo "$bin"; return; fi
+    bin="$(conda_agent_python "$conda_bin" || true)"
+    if [ -n "$bin" ] && python_is_compatible "$bin"; then echo "$bin"; return; fi
     die "the dedicated Python environment is missing; run ./setup.sh first."
   fi
   if [ -n "${DUET_PYTHON:-}" ]; then echo "$DUET_PYTHON"; return; fi
