@@ -83,13 +83,13 @@ from .state import RunRecord, StateError, StateStore, default_next_action, new_r
 logger = logging.getLogger("agent_duet")
 
 INSTRUCTIONS = (
-    "Use `agent_duet` for Claude->Codex->Claude work. Call `duet_start` once; retain "
-    "`run_id`. Keep exactly one `duet_wait` in flight with "
-    f"`timeout_seconds={FOREGROUND_WAIT_MAX_SECONDS}`; await it before new `duet_wait` "
-    "or `duet_status`. If client backgrounds it, await it; do not repoll. Continue to "
-    "terminal or `AWAITING_FINALIZE`. Never start a duplicate run or call from a child. "
-    "At `AWAITING_FINALIZE`, summarize evidence and get user approval before "
-    "`duet_finalize`. Never claim commit, push, deploy, or success without returned evidence."
+    "Call `duet_start` once with `direct_branch`; use `review_branch` only if the user "
+    "explicitly asks for a new branch. "
+    "Never suggest it for a dirty tree. Retain `run_id`. Keep exactly one `duet_wait` in "
+    f"flight with `timeout_seconds={FOREGROUND_WAIT_MAX_SECONDS}`; if backgrounded, await it; "
+    "do not repoll. Continue to terminal or `AWAITING_FINALIZE`. At `AWAITING_FINALIZE`, "
+    "summarize evidence and get user approval before `duet_finalize`. Never claim commit, "
+    "push, deploy, or success without returned evidence."
 )
 
 mcp: MCPServer[Any] = MCPServer(
@@ -261,44 +261,40 @@ def create_run(config: Config, store: StateStore, request: StartRequest) -> RunR
 async def duet_start(
     repo_path: str,
     task: str,
+    delivery_mode: Literal["review_branch", "direct_branch"],
     acceptance_criteria: list[str] | None = None,
-    delivery_mode: Literal["review_branch", "direct_branch"] | None = None,
     expected_base_ref: str | None = None,
     idempotency_key: str | None = None,
 ) -> RunStatus:
     """Start one Claude->Codex->Claude run and return immediately with its run_id.
 
-    delivery_mode decides where the work ends up, so pick it deliberately:
+    `delivery_mode` decides where the work ends up:
 
-    - ``direct_branch`` (the default) works on the branch the repository is already on,
-      so finalize commits there -- to ``main`` if that is where the user is. This is what
+    - `direct_branch` (the default) works on the branch the repository is already on,
+      so finalize commits there -- to `main` if that is where the user is. This is what
       "make this change" normally means. It requires a clean tree and an attached HEAD,
       because the run edits the checkout in place.
-    - ``review_branch`` parks the work on a new ``agent-duet/<id>`` branch that somebody
-      then has to merge, and tolerates a dirty tree because it works in its own private
-      worktree. Ask for it when the user wants to review before it touches their branch.
+    - `review_branch` parks the work on a new `agent-duet/<id>` branch that somebody
+      then has to merge. Use it only when the user explicitly requested a new or
+      separate branch.
 
-    Omit the argument to use the machine's ``git.default_delivery_mode``.
+    Interactive model callers must pass `direct_branch` unless the user explicitly asked
+    for a new branch. Never infer or suggest `review_branch` because the working tree is dirty.
+    The argument is required: omission must never inherit a setting that silently creates
+    a branch.
 
     Side effects: creates a durable run record, a branch and private worktree (in
-    review_branch mode), and a detached worker process that will modify files in that
+    `review_branch` mode), and a detached worker process that will modify files in that
     worktree. It NEVER commits, pushes, deploys, changes remotes, or rewrites history;
-    publishing is duet_finalize only. Call this once per task, keep the run_id, and poll
-    with duet_wait.
+    publishing is `duet_finalize` only. Call this once per task, keep the `run_id`, and poll
+    with `duet_wait`.
     """
     refuse_if_child("duet_start")
     config, store = _runtime()
-    # Unset means "whatever this machine is configured for". Resolving it here rather
-    # than in the signature is what makes git.default_delivery_mode do anything at all:
-    # a literal default in the signature can never be overridden by config, so the
-    # setting sat in config.example.toml looking functional while being ignored.
-    resolved_mode = delivery_mode or config.git.default_delivery_mode
     logger.info(
-        "duet_start called: repo=%s delivery_mode=%s (caller=%s) criteria=%d task=%dB "
-        "idempotency=%s",
+        "duet_start called: repo=%s delivery_mode=%s criteria=%d task=%dB idempotency=%s",
         repo_path,
-        resolved_mode,
-        delivery_mode or "unset",
+        delivery_mode,
         len(acceptance_criteria or []),
         len(task),
         idempotency_key,
@@ -308,7 +304,7 @@ async def duet_start(
         repo_path=Path(repo_path),
         task=task,
         acceptance_criteria=acceptance_criteria or [],
-        delivery_mode=resolved_mode,
+        delivery_mode=delivery_mode,
         expected_base_ref=expected_base_ref,
         idempotency_key=idempotency_key,
     )
@@ -1152,7 +1148,7 @@ def _validate_repo_for_start(config: Config, request: StartRequest) -> Any:
         if not info.clean:
             raise _fail(
                 "refusing an in-place run on a dirty working tree; commit or stash your "
-                "changes, or use delivery_mode=review_branch"
+                "changes, then retry on the same branch"
             )
         if info.detached:
             raise _fail("refusing direct_branch on a detached HEAD")

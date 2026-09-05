@@ -98,7 +98,8 @@ you would rather it stayed out of your checkout entirely, say so when you start:
 /duet <task> — put it on a review branch, I want to look first
 ```
 
-That runs in a private copy and leaves the work on its own branch for you to merge.
+That explicit request runs in a private copy and leaves the work on its own branch for
+you to merge. A dirty tree alone never selects or suggests this mode.
 
 ---
 
@@ -128,7 +129,7 @@ output to me as-is.
 | Fails at `CODEX_REVIEWING` | run `codex` on its own once and sign in |
 | `not below an allowed_repo_roots entry` | run `./setup.sh add-repo <the project>` |
 | `already active ... max_parallel_global is 1` | it names the run; `agent-duet cancel <run-id>` frees the slot |
-| `refusing an in-place run ... dirty working tree` | commit or stash first, or ask for a review branch |
+| `refusing an in-place run ... dirty working tree` | commit or stash first, then retry on the same branch |
 | Refuses to finalize | read the reason it gives; something changed after the tests ran |
 
 ---

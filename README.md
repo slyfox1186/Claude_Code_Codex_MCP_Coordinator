@@ -139,17 +139,18 @@ By default a run works **on the branch you are already on**, so finalizing commi
 If you are on `main`, it commits to `main`. That is what most people mean by "make this
 change", and it needs a clean working tree, because the run edits your checkout in place.
 
-If you would rather look before it touches your branch, ask for a review branch:
+If you explicitly want the work isolated, ask for a review branch:
 
 ```
 /duet <task> — put it on a review branch, I want to look first
 ```
 
 That runs in a private worktree instead, leaving your checkout completely untouched, and
-lands the work on its own `agent-duet/<id>` branch for you to merge. It is also the mode
-to use when your tree is dirty and you do not want to stash.
+lands the work on its own `agent-duet/<id>` branch for you to merge. Agent Duet never
+selects or suggests this mode merely because your working tree is dirty.
 
-Set the default for the machine with `default_delivery_mode` in `[git]` in your config.
+Every interactive `/duet` run passes its mode explicitly. No machine-wide default can
+silently create a branch.
 
 ---
 
@@ -235,7 +236,7 @@ agent-duet logs        # the most recent run, in full
 | Fails at `CODEX_REVIEWING` | run `codex` on its own once and sign in |
 | `not below an allowed_repo_roots entry` | `./setup.sh add-repo <the project>` |
 | `already active ... max_parallel_global is 1` | it names the run; `agent-duet cancel <run-id>` frees the slot |
-| `refusing an in-place run ... dirty working tree` | commit or stash, or ask for a review branch |
+| `refusing an in-place run ... dirty working tree` | commit or stash, then retry on the same branch |
 | Refuses to finalize | read the reason; something changed after the tests ran |
 
 ---

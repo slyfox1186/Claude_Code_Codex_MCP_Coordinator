@@ -3,7 +3,7 @@ description: Run the full Claude->Codex->Claude implement/review/reconcile workf
 argument-hint: [task description, or blank to use the current conversation]
 ---
 
-# Run an agent_duet workflow
+# Run an `agent_duet` workflow
 
 You are driving the `agent_duet` MCP coordinator. It runs a fresh Claude Code process to
 implement, a fresh Codex process to review independently, and a fresh Claude Code process
@@ -19,14 +19,25 @@ $ARGUMENTS
 A run costs real time and real model turns, and it cannot be steered once it starts. So
 gather everything you need **first**. Never invent a task, and never start on a vague one.
 
-You need four things. Work out which you already have, then ask only for the rest:
+You need three things. Work out which you already have, then ask only for the rest:
 
 | What | Where it usually comes from |
 |---|---|
 | The task | the argument above, or the conversation so far |
 | The repository | the current working directory's repository root |
 | Acceptance criteria | inferred from the task, then confirmed |
-| Delivery mode | leave it alone unless the user asked for a review branch |
+
+### Non-negotiable branch policy
+
+Always call `duet_start` with `delivery_mode="direct_branch"`. The only exception is
+when the user's current request explicitly asks for a new, separate, or review branch;
+only then may you pass `delivery_mode="review_branch"`.
+Never suggest or offer `review_branch`, include it among choices, or infer permission
+from circumstances. A dirty working tree is not permission to create a branch. If the
+tree is dirty, do not start the run: explain that the in-place run cannot safely mix with
+uncommitted work and ask whether the user wants you to validate and commit that work
+first or will clean it themselves. Never commit or stash it without their explicit
+authorization.
 
 **If the argument above is empty**, do not guess and do not start. Two cases:
 
@@ -50,13 +61,6 @@ decide", pick the most defensible option, state the assumption you are making, a
 Restate the final task and acceptance criteria in one short block before calling
 `duet_start`, so what the run received is on the record.
 
-**Do not pass `delivery_mode` unless the user asked for that behaviour.** Omitted, the
-run lands its commit on the branch they are already on, which is what asking for a change
-normally means. Pass `review_branch` only when they say they want to review it on a
-separate branch first, or when the working tree is dirty and they will not clean it —
-that mode is the one that creates `agent-duet/<id>`, and a branch nobody asked for reads
-as the tool going behind their back.
-
 ## What to do
 
 1. **Determine the repository.** Use the current working directory's repository root. It
@@ -68,8 +72,9 @@ as the tool going behind their back.
    tests still pass", "the new endpoint rejects an empty payload" — not restatements of
    the task. If you cannot infer any, say so and ask.
 
-3. **Call `duet_start` exactly once.** Keep the returned `run_id`. Never start a second
-   run for the same task; if you think you need one, stop and ask.
+3. **Call `duet_start` exactly once, following the branch policy above.** Keep the returned
+   `run_id`. Never start a second run for the same task; if you think you need one, stop
+   and ask.
 
    Translate the returned delivery mode when you report the start. For `direct_branch`,
    say **"using existing branch `<branch>`; no new branch"**. Do not say "direct branch

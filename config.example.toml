@@ -75,13 +75,8 @@ extra_args = []
 timeout_seconds = 7200
 
 [git]
-# Where a run's work lands when the caller does not say.
-#   "direct_branch" -- commit on the branch you are already on (main, usually).
-#                      Needs a clean tree and an attached HEAD; the run edits the
-#                      checkout in place.
-#   "review_branch" -- park it on branch_prefix + the run id for someone to merge.
-#                      Works in a private worktree, so a dirty tree is fine.
-default_delivery_mode = "direct_branch"
+# The MCP caller must choose `direct_branch` explicitly. `review_branch` is accepted only
+# when the user asks for it; no config default can silently create a branch.
 branch_prefix = "agent-duet/"
 allowed_remote_names = ["origin"]
 

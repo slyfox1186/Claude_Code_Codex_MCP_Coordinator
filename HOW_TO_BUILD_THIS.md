@@ -255,9 +255,9 @@ Acceptance criteria:
 - Both files are archived into the run directory and **removed** from the worktree before
   final validation, so neither can reach a commit.
 - The original repository's `HEAD` is unchanged; nothing is committed yet either way.
-  By default the run edits your checkout on the branch you are already on. Start it with
-  `delivery_mode="review_branch"` instead and the work happens in a private worktree on
-  an `agent-duet/<short-id>` branch, leaving your checkout completely alone.
+  By default the run edits your checkout on the branch you are already on. Only when the
+  user explicitly requests a separate branch, start it with `delivery_mode="review_branch"`;
+  the work then happens in a private worktree on an `agent-duet/<short-id>` branch.
 - The run stops at `AWAITING_FINALIZE`. Nothing is committed, pushed, or deployed.
 
 Inspect the evidence directly:
@@ -345,9 +345,9 @@ merely reads like one just has to be renamed. Then finalize again with the same 
 - **Never** share `~/.local/state/agent-duet` between machines, and never put it on NFS,
   Dropbox, or Syncthing. The two machines coordinate through git remotes, not through this
   database.
-- Do not run workflows against the same branch from both PCs at once. Use
-  `delivery_mode="review_branch"` there, so each run gets its own `agent-duet/<run-id>`
-  branch to merge through a pull request.
+- Do not run workflows against the same branch from both PCs at once. If the user
+  explicitly requests parallel review branches, use `delivery_mode="review_branch"` so
+  each run gets its own `agent-duet/<run-id>` branch to merge through a pull request.
 - Enable a deployment profile only on the machine that actually owns deployment.
 
 ---

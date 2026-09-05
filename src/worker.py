@@ -310,7 +310,7 @@ class Worker:
             if not info.clean:
                 raise PhaseFailure(
                     "refusing an in-place run: the working tree is dirty. Commit or "
-                    "stash your changes, or use delivery_mode=review_branch."
+                    "stash your changes, then retry on the same branch."
                 )
             if info.detached:
                 raise PhaseFailure("refusing direct_branch on a detached HEAD")

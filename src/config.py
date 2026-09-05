@@ -117,12 +117,9 @@ class GitConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    #: Where a run's work ends up when the caller does not say. ``direct_branch`` keeps
-    #: it on the branch you are already on, which is what most people mean by "make this
-    #: change"; ``review_branch`` parks it on ``branch_prefix`` + the run id, which is a
-    #: side branch somebody then has to merge. Defaulting to the side branch surprised
-    #: people: a run finished, nothing on their branch had changed, and GitHub offered
-    #: them a pull request they never asked for.
+    #: Retained so existing config files continue to load. The MCP start tool requires
+    #: an explicit delivery mode and does not consult this legacy value; an interactive
+    #: model must never inherit permission to create a branch.
     default_delivery_mode: Literal["review_branch", "direct_branch"] = "direct_branch"
     branch_prefix: str = "agent-duet/"
     allowed_remote_names: list[str] = Field(default_factory=lambda: ["origin"])

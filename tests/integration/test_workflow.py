@@ -496,8 +496,22 @@ def test_a_clean_review_records_the_read_only_verdict(config, store, repo, fake_
 
 def test_direct_branch_refuses_a_dirty_tree(config, store, repo):
     (repo / "uncommitted.txt").write_text("x\n")
-    with pytest.raises(Exception, match="dirty working tree"):
+    with pytest.raises(Exception, match="dirty working tree") as caught:
         start(config, store, repo, delivery_mode="direct_branch")
+    assert "review_branch" not in str(caught.value)
+
+
+def test_direct_branch_dirtied_after_start_does_not_suggest_a_new_branch(
+    config, store, repo, fake_log_dir
+):
+    record = start(config, store, repo, delivery_mode="direct_branch")
+    (repo / "uncommitted.txt").write_text("x\n")
+    run_worker(config, store, record.run_id)
+
+    final = store.get(record.run_id)
+    assert final.phase is Phase.FAILED
+    assert "working tree is dirty" in (final.error or "")
+    assert "review_branch" not in (final.error or "")
 
 
 def test_direct_branch_refuses_a_detached_head(config, store, repo):

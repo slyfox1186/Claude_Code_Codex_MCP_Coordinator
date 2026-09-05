@@ -162,6 +162,19 @@ def test_duet_command_translates_internal_states_into_numbered_progress():
     assert "Never report a raw phase enum by itself" in text
 
 
+def test_duet_command_never_offers_a_branch_for_a_dirty_tree():
+    text = (ROOT / "commands" / "duet.md").read_text()
+    assert 'delivery_mode="direct_branch"' in text
+    assert "Never suggest or offer `review_branch`" in text
+    assert "A dirty working tree is not permission" in text
+    assert "or when the working tree is dirty" not in text
+
+
+def test_start_tool_description_requires_an_explicit_branch_request():
+    text = (SRC / "server.py").read_text()
+    assert "Never infer or suggest `review_branch` because the working tree is dirty" in text
+
+
 def test_server_instructions_keep_the_whole_critical_contract_in_512_characters():
     from agent_duet.server import INSTRUCTIONS
 
@@ -169,6 +182,9 @@ def test_server_instructions_keep_the_whole_critical_contract_in_512_characters(
     assert "exactly one `duet_wait`" in INSTRUCTIONS
     assert "user approval before `duet_finalize`" in INSTRUCTIONS
     assert "Never claim commit, push, deploy, or success" in INSTRUCTIONS
+    assert "`direct_branch`" in INSTRUCTIONS
+    assert "`review_branch` only if the user explicitly asks" in INSTRUCTIONS
+    assert "Never suggest it for a dirty tree" in INSTRUCTIONS
 
 
 def test_a_run_keeps_the_templates_it_started_with(tmp_path, monkeypatch):
