@@ -201,10 +201,10 @@ below** an `allowed_repo_roots` entry.
 
 `-d` and `--directory` supply the project during installation and skip the later demo and
 path prompts. All three forms accept relative, absolute, `~/...`, and trailing-slash
-paths. The project need not already use Git. Setup explains that Agent Duet needs a local
-baseline, warns that every non-ignored file will enter local history, and asks for
-explicit consent before running `git init`, staging, and creating the baseline commit.
-It adds no remote and uploads nothing. Registration then detects the test suite (pytest,
+paths. The project need not already use Git. Setup automatically creates the local
+baseline Agent Duet needs for exact model-to-model comparisons by running `git init`,
+staging every non-ignored file, and creating one baseline commit. It adds no remote and
+uploads nothing. Registration then detects the test suite (pytest,
 `npm test`, `cargo test`, or `go test`) and writes the `[[repositories]]` entry between
 markers so `./setup.sh remove-repo` can take it back out cleanly.
 

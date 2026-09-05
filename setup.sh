@@ -81,7 +81,7 @@ cleanup_install_temp() {
 prompt_for_repo() {
   local target
   while true; do
-    read -r -p "    Project repository path (relative, absolute, or ~/...; blank to skip): " \
+    read -r -p "    Project directory path (relative, absolute, or ~/...; blank to skip): " \
       target || true
     if [ -z "$target" ]; then
       info "No project registered. Later: ./setup.sh add-repo /path/to/your/project"
@@ -582,15 +582,10 @@ ensure_git_baseline() {
     return 0
   fi
 
-  warn "$target needs a local Git baseline so Claude and Codex can compare their work."
-  info "With your consent, setup will initialize Git and make one local baseline commit."
-  info "Every existing file not excluded by .gitignore will enter local Git history,"
-  info "including sensitive files. Review .gitignore first if that may be a concern."
+  info "$target has no Git baseline, so setup is preparing it for Agent Duet."
+  info "This lets Codex identify exactly what Claude changed and verify the final files."
+  info "Existing files not excluded by .gitignore will enter local Git history."
   info "Nothing will be uploaded, and no remote will be added."
-  if ! ask_consent "Create the local Git baseline now?"; then
-    info "Project was not registered. The folder was left unchanged."
-    return 2
-  fi
 
   if ! git -C "$target" rev-parse --git-dir >/dev/null 2>&1; then
     git -C "$target" init -q --initial-branch=main \
@@ -612,7 +607,7 @@ ensure_git_baseline() {
     fi
     die "could not create the baseline commit in the existing Git repository"
   fi
-  ok "local baseline commit created on $(git -C "$target" branch --show-current)"
+  ok "created a local Git baseline on $(git -C "$target" branch --show-current)"
 }
 
 do_add_repo() {

@@ -355,12 +355,13 @@ def test_declining_demo_prompts_for_and_registers_repository(
     result = _run_interactive_setup(cwd=tmp_path, env=env, answers=f"n\n{answer}\n")
 
     assert result.returncode == 0, result.stdout
-    assert "Project repository path" in result.stdout
+    assert "Project directory path" in result.stdout
+    assert "Project repository path" not in result.stdout
     assert f"Registering {project}" in result.stdout
     assert f'path = "{project}"' in (home / ".config/agent-duet/config.toml").read_text()
 
 
-def test_guided_setup_initializes_plain_directory_with_explicit_consent(
+def test_guided_setup_initializes_plain_directory_without_an_extra_prompt(
     tmp_path: Path,
 ) -> None:
     home, env = _fake_install_environment(tmp_path)
@@ -373,13 +374,13 @@ def test_guided_setup_initializes_plain_directory_with_explicit_consent(
     result = _run_interactive_setup(
         cwd=tmp_path,
         env=env,
-        answers=f"n\n{project}/ \ny\n",
+        answers=f"n\n{project}/ \n",
     )
 
     assert result.returncode == 0, result.stdout
-    assert "needs a local Git baseline" in result.stdout
+    assert "Create the local Git baseline now?" not in result.stdout
+    assert "created a local Git baseline" in result.stdout
     assert "Nothing will be uploaded" in result.stdout
-    assert "local baseline commit created" in result.stdout
     assert (project / ".git").is_dir()
     tracked = subprocess.run(
         ["git", "-C", str(project), "ls-files"],
@@ -429,15 +430,15 @@ def test_directory_option_registers_without_project_or_demo_prompt(
 
     assert result.returncode == 0, result.stdout
     assert "Try it now on a throwaway project?" not in result.stdout
-    assert "Project repository path" not in result.stdout
+    assert "Project directory path" not in result.stdout
     assert f"Registering {project}" in result.stdout
     assert f'path = "{project}"' in (home / ".config/agent-duet/config.toml").read_text()
 
 
-def test_declining_git_initialization_leaves_plain_directory_unchanged(
+def test_directory_option_prepares_plain_directory_without_prompting(
     tmp_path: Path,
 ) -> None:
-    _, env = _fake_install_environment(tmp_path)
+    home, env = _fake_install_environment(tmp_path)
     project = tmp_path / "plain-folder"
     project.mkdir()
     source = project / "app.py"
@@ -446,14 +447,16 @@ def test_declining_git_initialization_leaves_plain_directory_unchanged(
     result = _run_interactive_setup(
         cwd=tmp_path,
         env=env,
-        answers="n\n",
+        answers="",
         args=("-d", str(project)),
     )
 
     assert result.returncode == 0, result.stdout
-    assert "Project was not registered" in result.stdout
-    assert not (project / ".git").exists()
+    assert "Create the local Git baseline now?" not in result.stdout
+    assert "created a local Git baseline" in result.stdout
+    assert (project / ".git").is_dir()
     assert source.read_text() == "print('hello')\n"
+    assert f'path = "{project}"' in (home / ".config/agent-duet/config.toml").read_text()
 
 
 def test_blank_repository_path_skips_registration(tmp_path: Path) -> None:

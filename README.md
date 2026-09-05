@@ -74,10 +74,10 @@ for consent before creating an environment or installing a missing provider CLI.
   shell profile.
 - `-d`/`--directory` skips the demo and project-path questions. The value may be relative,
   absolute, `~/...`, and may end in `/`.
-- The selected project may be an ordinary folder. With explicit consent, setup creates
-  the local Git baseline needed for safe model-to-model diffs. It records every existing
-  non-ignored file in one local commit, adds no remote, and uploads nothing. Review the
-  project's `.gitignore` first if it may contain sensitive files.
+- The selected project may be an ordinary folder. Setup automatically creates the local
+  Git baseline Agent Duet needs to compare Claude's and Codex's work. It records every
+  existing non-ignored file in one local commit, adds no remote, and uploads nothing.
+  Review the project's `.gitignore` first if it may contain sensitive files.
 
 Requirements: Linux and Git, plus Python 3.13+ when Conda is absent. `curl` or `wget` is
 needed only if a provider CLI must be downloaded. See **[INSTALL.md](INSTALL.md)** and read
@@ -127,8 +127,8 @@ it completes with a local commit. Say nothing and nothing happens.
 
 Project registration allows the project's parent directory, detects its test suite
 (pytest, `npm test`, `cargo test`, `go test`), and writes the config entry between
-markers so `remove-repo` takes it back out cleanly. A folder without Git history gets a
-consent prompt for the same local-only baseline initialization used by `-d`.
+markers so `remove-repo` takes it back out cleanly. If the folder has no Git history,
+setup automatically creates the same local-only baseline used by `-d`.
 
 ---
 

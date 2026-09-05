@@ -17,8 +17,8 @@ agent-duet with both Claude Code and Codex, installs the `/duet` command, and re
 the selected project.
 
 Without `-d`/`--directory`, setup offers a throwaway demo and then asks for a relative or
-full project path. A plain folder is accepted: after explicit consent, setup initializes
-local Git history from non-ignored files without adding a remote or uploading anything.
+full project path. A plain folder is accepted: setup automatically initializes local Git
+history from non-ignored files without adding a remote or uploading anything.
 
 It finishes by printing two lines to copy.
 

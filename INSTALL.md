@@ -24,10 +24,10 @@ The first dependency install can take a few minutes. Setup keeps the download pr
   updates, and Codex may add its bin directory to your shell profile's `PATH`.
 - `-d` or `--directory` accepts a relative path, full path, `~/...`, or a trailing `/`
   and skips the demo and project-path questions.
-- The project does not need to be a Git repository beforehand. Agent Duet needs a local
-  baseline to compare Claude's and Codex's work, so setup explains the change and asks
-  before initializing Git and committing the existing non-ignored files. Nothing is
-  uploaded and no remote is added. Review `.gitignore` first if sensitive files exist.
+- The project does not need to be a Git repository beforehand. Setup automatically
+  creates the local baseline Agent Duet needs to compare Claude's and Codex's work by
+  committing the existing non-ignored files. Nothing is uploaded and no remote is added.
+  Review `.gitignore` first if sensitive files exist.
 
 Check the finished installation:
 
