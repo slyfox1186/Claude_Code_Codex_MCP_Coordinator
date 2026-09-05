@@ -67,6 +67,8 @@ from .models import (
     FinalizeRequest,
     FinalizeResult,
     Phase,
+    RunLiveness,
+    RunLivenessState,
     RunStatus,
     StartRequest,
     valid_branch,
@@ -83,15 +85,15 @@ from .runners import cli_version
 from .state import RunRecord, StateError, StateStore, default_next_action, new_run_dir, utcnow
 
 logger = logging.getLogger("agent_duet")
+WORKER_START_GRACE_SECONDS = 30
 
 INSTRUCTIONS = (
-    "Call `duet_start` once with `direct_branch`; use `review_branch` only if the user "
-    "explicitly asks for a new branch. "
-    "Never suggest it for a dirty tree. Retain `run_id`. Keep exactly one `duet_wait` in "
-    f"flight with `timeout_seconds={FOREGROUND_WAIT_MAX_SECONDS}`; if backgrounded, await it; "
-    "do not repoll. Continue to terminal or `AWAITING_FINALIZE`. At `AWAITING_FINALIZE`, "
-    "summarize evidence and get user approval before `duet_finalize`. Never claim commit, "
-    "push, deploy, or success without returned evidence."
+    "Use `direct_branch`; `review_branch` only if the user explicitly asks. Never suggest it "
+    "for a dirty tree. Call `duet_start` once; retain `run_id`; keep "
+    "exactly one `duet_wait` in flight. Report progress only from a matching returned status "
+    "and its `liveness`; if a wait fails, make one `duet_status` recovery, then stop unverified. "
+    "At `AWAITING_FINALIZE`, get user approval before "
+    "`duet_finalize`. Never claim commit, push, deploy, or success without returned evidence."
 )
 
 mcp: MCPServer[Any] = MCPServer(
@@ -320,7 +322,7 @@ async def duet_start(
                 existing.run_id,
                 existing.phase.value,
             )
-            return existing.to_status()
+            return _status_with_liveness(existing)
 
     record = create_run(config, store, request)
     run_id = record.run_id
@@ -355,14 +357,14 @@ async def duet_start(
         worker_pgid=worker.pgid,
         worker_start_ticks=worker.start_ticks,
     )
-    return updated.to_status(
-        next_action=(
-            f"Keep run_id {run_id}. Call duet_wait once with timeout_seconds="
-            f"{FOREGROUND_WAIT_MAX_SECONDS}, then wait for that response before polling "
-            "again. Continue until AWAITING_FINALIZE or terminal. Do not start another "
-            "run for this task."
-        )
+    status = _status_with_liveness(updated)
+    status.next_action = (
+        f"Keep run_id {run_id}. Call duet_wait once with timeout_seconds="
+        f"{FOREGROUND_WAIT_MAX_SECONDS}, then wait for that response before polling "
+        "again. Continue until AWAITING_FINALIZE or terminal. Do not start another "
+        "run for this task."
     )
+    return status
 
 
 # ---------------------------------------------------------------------------
@@ -484,7 +486,18 @@ async def duet_cancel(run_id: UUID) -> RunStatus:
     except StateError as exc:
         raise _fail(str(exc)) from exc
     if record.terminal:
-        return record.to_status(next_action="This run already finished; nothing to cancel.")
+        if not _surviving_processes(record):
+            status = _status_with_liveness(record)
+            status.next_action = "This run already finished; nothing to cancel."
+            return status
+        updated, outcomes, leftover = await asyncio.to_thread(
+            _retry_terminal_cleanup, store, record
+        )
+        logger.info("duet_cancel %s terminal cleanup retry: %s", run_id, "; ".join(outcomes))
+        status = _status_with_liveness(updated)
+        if not leftover:
+            status.next_action = "Cleanup is now complete; report the run's terminal state."
+        return status
 
     store.request_cancel(run_id)
     outcomes = await asyncio.to_thread(_reap_run_processes, store, record)
@@ -504,7 +517,7 @@ async def duet_cancel(run_id: UUID) -> RunStatus:
             f"cleanup incomplete: {', '.join(leftover)}" if leftover else None
         ),
     )
-    return updated.to_status()
+    return _status_with_liveness(updated)
 
 
 def cancel(run_id: str, config_path: Path | None = None) -> int:
@@ -535,7 +548,16 @@ def cancel(run_id: str, config_path: Path | None = None) -> int:
 
     record = matches[0]
     if record.terminal:
-        print(f"{record.run_id} is already {record.phase.value}; nothing to cancel")
+        if not _surviving_processes(record):
+            print(f"{record.run_id} is already {record.phase.value}; nothing to cancel")
+            return 0
+        _, outcomes, leftover = _retry_terminal_cleanup(store, record)
+        print(f"{record.run_id} is already {record.phase.value}; retried process cleanup")
+        for line in outcomes:
+            print(f"  {line}")
+        if leftover:
+            print(f"  WARNING: still running: {', '.join(leftover)}", file=sys.stderr)
+            return 1
         return 0
 
     store.request_cancel(record.run_id)
@@ -573,16 +595,19 @@ def _reap_run_processes(store: StateStore, record: RunRecord) -> list[str]:
     outcomes: list[str] = []
     if record.active_child_pgid:
         label = record.active_child_label or "child"
-        outcomes.append(
-            f"{label}: "
-            + terminate_process_group(
-                record.active_child_pgid,
-                pid=record.active_child_pid,
-                start_ticks=record.active_child_ticks,
-            )
+        child_outcome = terminate_process_group(
+            record.active_child_pgid,
+            pid=record.active_child_pid,
+            start_ticks=record.active_child_ticks,
         )
-        with contextlib.suppress(StateError):
-            store.clear_active_child(record.run_id)
+        outcomes.append(f"{label}: {child_outcome}")
+        child_still_alive = bool(
+            record.active_child_pid
+            and process_alive(record.active_child_pid, record.active_child_ticks)
+        )
+        if not child_still_alive:
+            with contextlib.suppress(StateError):
+                store.clear_active_child(record.run_id)
     if record.worker_pgid:
         outcomes.append(
             "worker: "
@@ -605,6 +630,23 @@ def _surviving_processes(record: RunRecord) -> list[str]:
     if record.worker_pid and process_alive(record.worker_pid, record.worker_start_ticks):
         survivors.append(f"worker pid {record.worker_pid}")
     return survivors
+
+
+def _retry_terminal_cleanup(
+    store: StateStore, record: RunRecord
+) -> tuple[RunRecord, list[str], list[str]]:
+    """Retry process cleanup without changing an already terminal phase."""
+    outcomes = _reap_run_processes(store, record)
+    leftover = _surviving_processes(store.get(record.run_id))
+    summary = f"Run is already {record.phase.value}; remaining process cleanup was retried."
+    if leftover:
+        summary += f" WARNING: {len(leftover)} process(es) could not be confirmed gone."
+    updated = store.update(
+        record.run_id,
+        summary=summary,
+        error=f"cleanup incomplete: {', '.join(leftover)}" if leftover else None,
+    )
+    return updated, outcomes, leftover
 
 
 # ---------------------------------------------------------------------------
@@ -682,6 +724,13 @@ def _finalize_blocking(
         raise _fail(
             f"run {run_key} is {record.phase.value}, not AWAITING_FINALIZE; refusing to "
             "publish. Only a fully validated run may be finalized."
+        )
+    if record.active_child_pid and process_alive(
+        record.active_child_pid, record.active_child_ticks
+    ):
+        raise _fail(
+            "the recorded child process is still alive; refusing to publish a tree that "
+            "could still be changing. Call duet_cancel to stop and clean up this run."
         )
     if record.branch != request.expected_branch:
         raise _fail(
@@ -1163,13 +1212,120 @@ def _validate_repo_for_start(config: Config, request: StartRequest) -> Any:
     return info
 
 
+def _worker_start_grace_expired(record: RunRecord) -> bool:
+    """Return whether a worker-less row is too old to still be in the spawn race."""
+    try:
+        created_at = datetime.fromisoformat(record.created_at)
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=UTC)
+        age_seconds = (datetime.now(UTC) - created_at).total_seconds()
+    except (TypeError, ValueError):
+        return True
+    return age_seconds >= WORKER_START_GRACE_SECONDS
+
+
 def _worker_vanished(record: RunRecord) -> bool:
     """Return whether a non-terminal run's worker process is gone."""
-    if record.terminal or record.phase is Phase.AWAITING_FINALIZE:
+    if record.terminal or record.phase in {Phase.AWAITING_FINALIZE, Phase.FINALIZING}:
         return False
+    if record.worker_pid:
+        return not process_alive(record.worker_pid, record.worker_start_ticks)
+    return _worker_start_grace_expired(record)
+
+
+_MODEL_CHILD_BY_PHASE = {
+    Phase.CLAUDE_IMPLEMENTING: "phase1-claude",
+    Phase.CODEX_REVIEWING: "phase2-codex",
+    Phase.CLAUDE_RECONCILING: "phase3-claude",
+}
+
+
+def _measure_liveness(record: RunRecord) -> RunLiveness:
+    """Measure run processes without trusting a stored phase label as proof of work."""
+    checked_at = utcnow()
+    worker_alive = (
+        process_alive(record.worker_pid, record.worker_start_ticks) if record.worker_pid else None
+    )
+    child_alive = (
+        process_alive(record.active_child_pid, record.active_child_ticks)
+        if record.active_child_pid
+        else None
+    )
+
+    def measured(state: RunLivenessState, detail: str) -> RunLiveness:
+        return RunLiveness(
+            state=state,
+            checked_at=checked_at,
+            worker_alive=worker_alive,
+            child_label=record.active_child_label,
+            child_alive=child_alive,
+            detail=detail,
+        )
+
+    cleanup_processes: list[str] = []
+    if child_alive:
+        cleanup_processes.append("recorded child")
+    if record.terminal and worker_alive:
+        cleanup_processes.append("worker")
+    if cleanup_processes and (
+        record.terminal or record.phase is Phase.AWAITING_FINALIZE
+    ):
+        noun = "processes remain" if len(cleanup_processes) > 1 else "process remains"
+        return measured(
+            "CLEANUP_REQUIRED",
+            "The run cannot proceed while its "
+            + " and ".join(cleanup_processes)
+            + f" {noun} alive.",
+        )
+    if record.terminal:
+        return measured("FINISHED", f"The durable run is terminal ({record.phase.value}).")
+    if record.phase is Phase.AWAITING_FINALIZE:
+        return measured(
+            "AWAITING_OPERATOR",
+            "Model work is finished; the run is waiting for finalization approval.",
+        )
+    if record.phase is Phase.FINALIZING:
+        return measured("FINALIZING", "The coordinator is finalizing the already validated change.")
+    worker_missing = (
+        worker_alive is False
+        if record.worker_pid
+        else _worker_start_grace_expired(record)
+    )
+    if worker_missing:
+        detail = (
+            "No worker process was recorded within the startup grace period."
+            if not record.worker_pid
+            else "The recorded worker process is not alive."
+        )
+        if child_alive:
+            detail += " Its recorded child is still alive and must be reaped with duet_cancel."
+        return measured("WORKER_MISSING", detail)
     if not record.worker_pid:
-        return False
-    return not process_alive(record.worker_pid, record.worker_start_ticks)
+        state: RunLivenessState = "STARTING" if record.phase is Phase.QUEUED else "TRANSITIONING"
+        return measured(
+            state, "The worker process has not been recorded yet; model activity is unverified."
+        )
+    if record.phase is Phase.QUEUED:
+        return measured("STARTING", "The worker is verified alive and is starting the run.")
+
+    expected_child = _MODEL_CHILD_BY_PHASE.get(record.phase)
+    if expected_child:
+        if record.active_child_label == expected_child and child_alive:
+            return measured(
+                "MODEL_ACTIVE", f"The worker and {expected_child} process are verified alive."
+            )
+        return measured(
+            "TRANSITIONING",
+            (
+                f"The worker is alive, but the expected {expected_child} process is not "
+                "verified alive; the worker may be starting it or handling its exit."
+            ),
+        )
+
+    return measured(
+        "COORDINATOR_ACTIVE",
+        "The worker process is verified alive in a coordinator validation phase.",
+    )
 
 
 def _status_with_liveness(record: RunRecord) -> RunStatus:
@@ -1179,9 +1335,20 @@ def _status_with_liveness(record: RunRecord) -> RunStatus:
     anything. A dead worker is therefore reported here and persisted by the next
     mutating call (:func:`_reap_dead_runs` from ``duet_start``, or ``duet_cancel``).
     """
-    if not _worker_vanished(record):
-        return record.to_status(next_action=default_next_action(record.phase))
     status = record.to_status()
+    status.liveness = _measure_liveness(record)
+    if status.liveness.state == "CLEANUP_REQUIRED":
+        status.summary = status.liveness.detail
+        status.next_action = (
+            "Call duet_cancel again to retry cleanup. Do not start another run until the "
+            "recorded child is confirmed gone."
+        )
+        return status
+    if status.liveness.state != "WORKER_MISSING":
+        if status.liveness.state in {"STARTING", "TRANSITIONING"}:
+            status.summary = status.liveness.detail
+        status.next_action = default_next_action(record.phase)
+        return status
     status.phase = Phase.FAILED
     status.terminal = True
     status.error = (
@@ -1190,10 +1357,16 @@ def _status_with_liveness(record: RunRecord) -> RunStatus:
         "logs. Nothing was committed, pushed, or deployed."
     )
     status.summary = "Worker died unexpectedly. Nothing was committed, pushed, or deployed."
-    status.next_action = (
-        "Report the failure and the preserved evidence. This run cannot be resumed; "
-        "start a new one if the work is still wanted."
-    )
+    if status.liveness.child_alive:
+        status.next_action = (
+            "Call duet_cancel once to terminate the orphaned child, then report the failure. "
+            "Do not start another run until cleanup is confirmed."
+        )
+    else:
+        status.next_action = (
+            "Report the failure and the preserved evidence. This run cannot be resumed; "
+            "start a new one if the work is still wanted."
+        )
     return status
 
 
@@ -1213,11 +1386,23 @@ def _reap_dead_runs(store: StateStore, repo_path: str) -> list[str]:
             record.phase.value,
             record.worker_pid,
         )
+        outcomes = _reap_run_processes(store, record)
+        survivors = _surviving_processes(store.get(record.run_id))
+        if survivors:
+            logger.error(
+                "run %s cleanup incomplete (%s); leaving it active to block another run",
+                record.run_id,
+                ", ".join(survivors),
+            )
+            continue
         with contextlib.suppress(StateError):
             store.transition(
                 record.run_id,
                 Phase.FAILED,
-                reason="worker process is no longer running",
+                reason=(
+                    "worker process is no longer running; cleanup: "
+                    + ("; ".join(outcomes) or "no recorded process groups")
+                ),
                 error=(
                     f"the worker process (pid {record.worker_pid}) exited without "
                     "reaching a terminal state; see the run directory logs"

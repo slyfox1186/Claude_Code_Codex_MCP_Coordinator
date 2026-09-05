@@ -222,6 +222,33 @@ class ValidationResult(BaseModel):
     tail: str = ""
 
 
+RunLivenessState = Literal[
+    "UNKNOWN",
+    "STARTING",
+    "MODEL_ACTIVE",
+    "COORDINATOR_ACTIVE",
+    "TRANSITIONING",
+    "AWAITING_OPERATOR",
+    "FINALIZING",
+    "FINISHED",
+    "CLEANUP_REQUIRED",
+    "WORKER_MISSING",
+]
+
+
+class RunLiveness(BaseModel):
+    """Process evidence measured when a status response is built."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    state: RunLivenessState = "UNKNOWN"
+    checked_at: str = ""
+    worker_alive: bool | None = None
+    child_label: str | None = None
+    child_alive: bool | None = None
+    detail: str = "Liveness was not measured on this projection."
+
+
 class RunStatus(BaseModel):
     """The single status shape returned by status/wait/start/cancel."""
 
@@ -241,6 +268,7 @@ class RunStatus(BaseModel):
     summary: str = ""
     error: str | None = None
     evidence: Evidence = Field(default_factory=lambda: Evidence())
+    liveness: RunLiveness = Field(default_factory=lambda: RunLiveness())
     next_action: str = ""
 
 

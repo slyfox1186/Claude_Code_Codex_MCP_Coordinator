@@ -35,6 +35,9 @@ Check the finished installation:
 ./setup.sh check
 ```
 
+Close and reopen any Claude Code or Codex sessions that were already running during
+setup. Open clients retain the old MCP process and `/duet` instructions loaded at startup.
+
 Requirements: Linux and Git. Without Conda, the server also needs Python 3.13 or newer.
 `curl` or `wget` is needed only when a provider CLI must be downloaded.
 

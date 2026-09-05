@@ -341,6 +341,25 @@ def test_finalize_is_not_repeatable(runtime, config, store, repo, bare_remote, f
         finalize(record, bare_remote)
 
 
+def test_finalize_refuses_while_a_recorded_child_is_alive(
+    runtime, config, store, repo, bare_remote, fake_log_dir
+):
+    record = ready_run(config, store, repo)
+    store.set_active_child(
+        record.run_id,
+        pid=os.getpid(),
+        pgid=os.getpgrp(),
+        ticks=None,
+        label="phase3-claude",
+    )
+
+    before = remote_sha(bare_remote, record.branch, repo)
+    with pytest.raises(ToolError, match="recorded child process is still alive"):
+        finalize(record, bare_remote)
+    assert remote_sha(bare_remote, record.branch, repo) == before
+    assert store.get(record.run_id).phase is Phase.AWAITING_FINALIZE
+
+
 def test_a_run_that_changed_nothing_cannot_be_committed(
     runtime, config, store, repo, bare_remote, fake_log_dir
 ):

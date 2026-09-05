@@ -151,6 +151,17 @@ def test_duet_command_keeps_only_one_foreground_safe_wait_in_flight():
     assert "background task" in text
 
 
+def test_duet_command_requires_verified_matching_status_before_reporting_progress():
+    text = (ROOT / "commands" / "duet.md").read_text()
+    assert "whose `run_id` exactly matches" in text
+    assert "`liveness.state`" in text
+    assert "one `duet_status` recovery call" in text
+    assert "stale/unverified" in text
+    assert "Never infer a phase, file change, or model activity" in text
+    assert "`CLEANUP_REQUIRED`" in text
+    assert "retry `duet_cancel`" in text
+
+
 def test_duet_command_translates_internal_states_into_numbered_progress():
     text = (ROOT / "commands" / "duet.md").read_text()
     assert "Phase 1 of 3" in text
@@ -185,6 +196,9 @@ def test_server_instructions_keep_the_whole_critical_contract_in_512_characters(
     assert "`direct_branch`" in INSTRUCTIONS
     assert "`review_branch` only if the user explicitly asks" in INSTRUCTIONS
     assert "Never suggest it for a dirty tree" in INSTRUCTIONS
+    assert "matching returned status" in INSTRUCTIONS
+    assert "`liveness`" in INSTRUCTIONS
+    assert "one `duet_status`" in INSTRUCTIONS
 
 
 def test_a_run_keeps_the_templates_it_started_with(tmp_path, monkeypatch):

@@ -864,6 +864,16 @@ def test_guided_setup_runs_health_check_before_finishing(tmp_path: Path) -> None
     )
 
 
+def test_guided_setup_tells_users_to_restart_open_clients(tmp_path: Path) -> None:
+    _, _, _, _, env = _guided_setup_environment(tmp_path)
+
+    result = _run_interactive_setup(cwd=tmp_path, env=env, answers="n\n\n")
+
+    assert result.returncode == 0, result.stdout
+    assert "Close and reopen any Claude Code or Codex sessions" in result.stdout
+    assert "keep the old MCP process and /duet instructions" in result.stdout
+
+
 def test_health_check_surfaces_missing_project_warning_without_failing(tmp_path: Path) -> None:
     home, env = _fake_install_environment(tmp_path)
     fake_agent_duet = tmp_path / "bin/agent-duet"

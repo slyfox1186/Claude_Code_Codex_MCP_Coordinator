@@ -87,6 +87,10 @@ needed only if a provider CLI must be downloaded. See **[INSTALL.md](INSTALL.md)
 Setup never uses `sudo`. It validates generated configuration, backs up files it replaces
 to `<name>.duet-backup`, and is safe to rerun.
 
+After setup or an upgrade, close and reopen any Claude Code or Codex sessions that were
+already running. An open client keeps the MCP process and `/duet` instructions it loaded
+at startup; continuing in it can show stale or unverifiable progress.
+
 ---
 
 ## Use it
@@ -187,7 +191,7 @@ Worth confirming once, the first time:
 | Tool | What it does | Publishes? |
 |---|---|---|
 | `duet_start` | Validates the repo, creates the run, spawns a detached worker, returns a `run_id` in seconds | No |
-| `duet_status` | Durable phase, timestamps, evidence, next action | No |
+| `duet_status` | Durable phase, verified worker/child liveness, timestamps, evidence, next action | No |
 | `duet_wait` | The same, after one foreground-safe wait of at most 90 s | No |
 | `duet_cancel` | Sets the cancel flag and reaps the worker's process group | No |
 | `duet_finalize` | Commits, pushes, verifies the remote ref, runs a deployment verifier | **Yes** |
@@ -213,6 +217,13 @@ QUEUED -> CLAUDE_IMPLEMENTING -> HANDOFF_VALIDATING -> CODEX_REVIEWING
 
 `FAILED`, `CANCELLED`, and `COMPLETE` are terminal. Every transition is written to SQLite
 with a timestamp and a reason *before* the work that follows it happens.
+
+Every status also reports server-measured `liveness`: whether the detached worker and
+the expected Claude or Codex child process are alive at that instant. `/duet` may call a
+model phase active only when that status belongs to the retained `run_id` and reports
+`MODEL_ACTIVE`; a lost or unknown result is never treated as progress.
+If cleanup could not terminate a recorded child process, status reports
+`CLEANUP_REQUIRED`; repeating `duet_cancel` retries cleanup instead of forgetting it.
 
 The run survives the client that started it — the worker is detached, so you can close the
 terminal, reopen either CLI, and pick up where you left off.

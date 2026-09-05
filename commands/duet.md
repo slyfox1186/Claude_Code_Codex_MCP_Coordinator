@@ -90,19 +90,34 @@ Restate the final task and acceptance criteria in one short block before calling
    work continues independently and can take hours; the 90-second value limits only one
    status poll, not Claude's or Codex's work.
 
+   Treat only a successfully returned status object whose `run_id` exactly matches the
+   retained `run_id` as evidence. Read `liveness.state`, `worker_alive`, and
+   `child_alive` before describing activity. If a wait errors, its background result is
+   lost, or it returns no matching status, make one `duet_status` recovery call. If that
+   call also fails to return a matching status, report the session as **stale/unverified**
+   and stop. Never infer a phase, file change, or model activity from a spinner, elapsed
+   time, earlier narrative, or repository inspection.
+
    Never report a raw phase enum by itself, and never say only "Still
    `CLAUDE_IMPLEMENTING`." Translate active model phases into meaningful progress:
 
-   - `CLAUDE_IMPLEMENTING`: **Phase 1 of 3 — Claude is actively implementing. This is
-     not the final step and may take hours for a broad task.**
-   - `CODEX_REVIEWING`: **Phase 2 of 3 — Codex is independently reviewing Claude's
-     work.**
-   - `CLAUDE_RECONCILING`: **Phase 3 of 3 — Claude is adjudicating Codex's review and
-     fixing justified findings.**
+   - `CLAUDE_IMPLEMENTING` with `MODEL_ACTIVE`: **Phase 1 of 3 — Claude's implementation
+     process is verified alive. This is not the final step and may take hours for a broad
+     task.**
+   - `CODEX_REVIEWING` with `MODEL_ACTIVE`: **Phase 2 of 3 — Codex's independent review
+     process is verified alive.**
+   - `CLAUDE_RECONCILING` with `MODEL_ACTIVE`: **Phase 3 of 3 — Claude's reconciliation
+     process is verified alive and is adjudicating Codex's findings.**
+
+   If a model phase returns any other liveness state, report its `liveness.detail`
+   instead of claiming that Claude or Codex is active. A repeated verified phase means
+   that phase remains active; it does not mean the model was stopped.
+
+   If any status returns `CLEANUP_REQUIRED`, follow its `next_action` and retry `duet_cancel`
+   once. Do not start or finalize another run while a recorded child process remains alive.
 
    For a validation phase, say which two model phases it sits between or that final
-   validation follows phase 3. Repeating a phase means that phase remains active; it
-   does not mean the run is finished or that its model was stopped.
+   validation follows phase 3.
 
 5. **At `AWAITING_FINALIZE`, stop and report.** Summarize, from the returned evidence
    only:

@@ -32,6 +32,8 @@ from agent_duet.server import (
     _worker_vanished,
     create_run,
     doctor,
+    duet_cancel,
+    duet_status,
     duet_wait,
 )
 from agent_duet.state import StateError, StateStore
@@ -235,6 +237,83 @@ def test_cancel_reaps_the_recorded_child_group(config, store, repo, monkeypatch)
     assert store.get(record.run_id).active_child_pid is None
 
 
+def test_failed_child_cleanup_keeps_its_identity_for_another_attempt(
+    config, store, repo, monkeypatch
+):
+    """A failed signal must not erase the only handle to a privileged child process."""
+    from agent_duet import process_guard
+    from agent_duet.server import _reap_run_processes
+
+    record = start(config, store, repo)
+    store.set_active_child(
+        record.run_id,
+        pid=os.getpid(),
+        pgid=os.getpgrp(),
+        ticks=None,
+        label="phase1-claude",
+    )
+    monkeypatch.setattr(
+        process_guard,
+        "terminate_process_group",
+        lambda *args, **kwargs: "permission denied signalling process group",
+    )
+
+    outcomes = _reap_run_processes(store, store.get(record.run_id))
+
+    assert "permission denied" in outcomes[0]
+    assert store.get(record.run_id).active_child_pid == os.getpid()
+
+
+def test_repeated_duet_cancel_retries_incomplete_terminal_cleanup(
+    config, store, repo, monkeypatch
+):
+    from agent_duet import process_guard
+    from agent_duet.process_guard import process_start_ticks
+
+    record = start(config, store, repo)
+    child = subprocess.Popen(
+        ["/usr/bin/sleep", "300"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    store.set_active_child(
+        record.run_id,
+        pid=child.pid,
+        pgid=os.getpgid(child.pid),
+        ticks=process_start_ticks(child.pid),
+        label="phase1-claude",
+    )
+    original_terminate = process_guard.terminate_process_group
+    attempts = 0
+
+    def fail_once(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return "permission denied signalling process group"
+        return original_terminate(*args, **kwargs)
+
+    monkeypatch.setattr(process_guard, "terminate_process_group", fail_once)
+    RUNTIME._config, RUNTIME._store = config, store
+    try:
+        first = asyncio.run(duet_cancel(UUID(record.run_id)))
+        assert first.phase is Phase.CANCELLED
+        assert first.liveness.child_alive is True
+        assert process_alive(child.pid, None)
+
+        second = asyncio.run(duet_cancel(UUID(record.run_id)))
+        assert second.phase is Phase.CANCELLED
+        assert second.liveness.child_alive is None
+        assert not process_alive(child.pid, None)
+        assert store.get(record.run_id).active_child_pid is None
+    finally:
+        RUNTIME.reset()
+        with contextlib.suppress(OSError):
+            os.kill(child.pid, 9)
+
+
 def test_the_worker_records_and_clears_its_active_child(config, store, repo, fake_log_dir):
     record = start(config, store, repo)
     run_worker(config, store, record.run_id)
@@ -381,7 +460,166 @@ def test_status_reports_a_dead_worker_without_writing(config, store, repo):
     status = _status_with_liveness(stale)
     assert status.phase is Phase.FAILED
     assert status.terminal is True
+    assert status.liveness.state == "WORKER_MISSING"
+    assert status.liveness.worker_alive is False
+    assert status.liveness.checked_at
     assert store.get(record.run_id).phase is Phase.CLAUDE_IMPLEMENTING, "no write allowed"
+
+
+def test_status_proves_the_expected_model_process_is_alive(config, store, repo):
+    record = start(config, store, repo)
+    store.transition(record.run_id, Phase.CLAUDE_IMPLEMENTING)
+    store.update(record.run_id, worker_pid=os.getpid(), worker_start_ticks=None)
+    store.set_active_child(
+        record.run_id,
+        pid=os.getpid(),
+        pgid=os.getpgrp(),
+        ticks=None,
+        label="phase1-claude",
+    )
+
+    status = _status_with_liveness(store.get(record.run_id))
+
+    assert status.liveness.state == "MODEL_ACTIVE"
+    assert status.liveness.worker_alive is True
+    assert status.liveness.child_label == "phase1-claude"
+    assert status.liveness.child_alive is True
+    assert "verified alive" in status.liveness.detail
+
+
+def test_queued_status_calls_a_live_worker_starting_not_validating(config, store, repo):
+    record = start(config, store, repo)
+    store.update(record.run_id, worker_pid=os.getpid(), worker_start_ticks=None)
+
+    status = _status_with_liveness(store.get(record.run_id))
+
+    assert status.phase is Phase.QUEUED
+    assert status.liveness.state == "STARTING"
+    assert status.liveness.worker_alive is True
+    assert "starting" in status.liveness.detail.lower()
+
+
+def test_mcp_status_returns_the_measured_liveness_object(config, store, repo):
+    record = start(config, store, repo)
+    store.transition(record.run_id, Phase.CLAUDE_IMPLEMENTING)
+    store.update(record.run_id, worker_pid=os.getpid(), worker_start_ticks=None)
+    store.set_active_child(
+        record.run_id,
+        pid=os.getpid(),
+        pgid=os.getpgrp(),
+        ticks=None,
+        label="phase1-claude",
+    )
+    RUNTIME._config, RUNTIME._store = config, store
+    try:
+        status = asyncio.run(duet_status(UUID(record.run_id)))
+    finally:
+        RUNTIME.reset()
+
+    assert status.run_id == record.run_id
+    assert status.liveness.state == "MODEL_ACTIVE"
+    assert status.liveness.checked_at
+
+
+def test_terminal_status_requires_cleanup_while_its_worker_is_alive(config, store, repo):
+    record = start(config, store, repo)
+    store.transition(record.run_id, Phase.CANCELLED, reason="test terminal state")
+    terminal = store.update(
+        record.run_id, worker_pid=os.getpid(), worker_start_ticks=None
+    )
+
+    status = _status_with_liveness(terminal)
+
+    assert status.liveness.state == "CLEANUP_REQUIRED"
+    assert status.liveness.worker_alive is True
+    assert "duet_cancel" in status.next_action
+
+
+def test_awaiting_finalize_requires_cleanup_while_a_child_is_alive(config, store, repo):
+    record = start(config, store, repo)
+    for phase in (
+        Phase.CLAUDE_IMPLEMENTING,
+        Phase.HANDOFF_VALIDATING,
+        Phase.CODEX_REVIEWING,
+        Phase.REVIEW_INTEGRITY_CHECK,
+        Phase.CLAUDE_RECONCILING,
+        Phase.FINAL_VALIDATING,
+        Phase.AWAITING_FINALIZE,
+    ):
+        store.transition(record.run_id, phase, reason="driven by the test")
+    store.set_active_child(
+        record.run_id,
+        pid=os.getpid(),
+        pgid=os.getpgrp(),
+        ticks=None,
+        label="phase3-claude",
+    )
+
+    status = _status_with_liveness(store.get(record.run_id))
+
+    assert status.liveness.state == "CLEANUP_REQUIRED"
+    assert status.liveness.child_alive is True
+    assert "duet_cancel" in status.next_action
+
+
+def test_status_directs_cleanup_when_a_dead_worker_left_a_live_child(config, store, repo):
+    record = start(config, store, repo)
+    store.transition(record.run_id, Phase.CLAUDE_IMPLEMENTING)
+    store.update(record.run_id, worker_pid=999_999_999, worker_start_ticks="123")
+    store.set_active_child(
+        record.run_id,
+        pid=os.getpid(),
+        pgid=os.getpgrp(),
+        ticks=None,
+        label="phase1-claude",
+    )
+
+    status = _status_with_liveness(store.get(record.run_id))
+
+    assert status.liveness.state == "WORKER_MISSING"
+    assert status.liveness.child_alive is True
+    assert "duet_cancel" in status.next_action
+    assert "start a new one" not in status.next_action
+
+
+@pytest.mark.parametrize("child_pid", [None, 999_999_999])
+def test_status_never_calls_a_model_active_without_a_live_child(config, store, repo, child_pid):
+    record = start(config, store, repo)
+    store.transition(record.run_id, Phase.CLAUDE_IMPLEMENTING)
+    store.update(record.run_id, worker_pid=os.getpid(), worker_start_ticks=None)
+    if child_pid is not None:
+        store.set_active_child(
+            record.run_id,
+            pid=child_pid,
+            pgid=child_pid,
+            ticks=None,
+            label="phase1-claude",
+        )
+
+    status = _status_with_liveness(store.get(record.run_id))
+
+    assert status.phase is Phase.CLAUDE_IMPLEMENTING
+    assert status.terminal is False
+    assert status.liveness.state == "TRANSITIONING"
+    assert status.liveness.worker_alive is True
+    assert status.liveness.child_alive is (False if child_pid else None)
+    assert "not verified alive" in status.liveness.detail
+    assert status.summary == status.liveness.detail
+
+
+def test_one_status_response_uses_one_consistent_worker_liveness_sample(
+    config, store, repo, monkeypatch
+):
+    record = start(config, store, repo)
+    store.transition(record.run_id, Phase.CLAUDE_IMPLEMENTING)
+    store.update(record.run_id, worker_pid=123_456, worker_start_ticks="789")
+    samples = iter((True, False))
+    monkeypatch.setattr("agent_duet.server.process_alive", lambda *args: next(samples))
+
+    status = _status_with_liveness(store.get(record.run_id))
+
+    assert status.liveness.worker_alive is True
+    assert status.liveness.state == "TRANSITIONING"
 
 
 def test_start_reaps_a_crashed_run_so_it_stops_blocking(config, store, repo):
@@ -393,6 +631,116 @@ def test_start_reaps_a_crashed_run_so_it_stops_blocking(config, store, repo):
     assert reaped == [record.run_id]
     assert store.get(record.run_id).phase is Phase.FAILED
     assert store.active_runs(str(repo)) == []
+
+
+def test_start_reaps_an_abandoned_queued_row_that_never_recorded_a_worker(
+    config, store, repo
+):
+    record = start(config, store, repo)
+    with store.transaction() as conn:
+        conn.execute(
+            "UPDATE runs SET created_at = ?, updated_at = ? WHERE run_id = ?",
+            ("2000-01-01T00:00:00+00:00", "2000-01-01T00:00:00+00:00", record.run_id),
+        )
+
+    abandoned = store.get(record.run_id)
+    assert _worker_vanished(abandoned)
+    status = _status_with_liveness(abandoned)
+    assert status.liveness.state == "WORKER_MISSING"
+    assert status.terminal is True
+    assert _reap_dead_runs(store, str(repo)) == [record.run_id]
+    assert store.get(record.run_id).phase is Phase.FAILED
+
+
+def test_finalizing_is_not_reaped_for_having_no_detached_worker(config, store, repo):
+    record = start(config, store, repo)
+    for phase in (
+        Phase.CLAUDE_IMPLEMENTING,
+        Phase.HANDOFF_VALIDATING,
+        Phase.CODEX_REVIEWING,
+        Phase.REVIEW_INTEGRITY_CHECK,
+        Phase.CLAUDE_RECONCILING,
+        Phase.FINAL_VALIDATING,
+        Phase.AWAITING_FINALIZE,
+        Phase.FINALIZING,
+    ):
+        store.transition(record.run_id, phase)
+    with store.transaction() as conn:
+        conn.execute(
+            "UPDATE runs SET created_at = ?, updated_at = ?, worker_pid = NULL "
+            "WHERE run_id = ?",
+            ("2000-01-01T00:00:00+00:00", "2000-01-01T00:00:00+00:00", record.run_id),
+        )
+
+    finalizing = store.get(record.run_id)
+    assert not _worker_vanished(finalizing)
+    assert _status_with_liveness(finalizing).liveness.state == "FINALIZING"
+
+
+def test_reaping_a_crashed_worker_also_terminates_its_orphan_child(config, store, repo):
+    record = start(config, store, repo)
+    store.transition(record.run_id, Phase.CLAUDE_IMPLEMENTING)
+    store.update(
+        record.run_id,
+        worker_pid=999_999_999,
+        worker_pgid=999_999_999,
+        worker_start_ticks="123",
+    )
+    child = subprocess.Popen(
+        ["/usr/bin/sleep", "300"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    from agent_duet.process_guard import process_start_ticks
+
+    store.set_active_child(
+        record.run_id,
+        pid=child.pid,
+        pgid=os.getpgid(child.pid),
+        ticks=process_start_ticks(child.pid),
+        label="phase1-claude",
+    )
+    try:
+        assert _reap_dead_runs(store, str(repo)) == [record.run_id]
+        assert not process_alive(child.pid, None)
+        assert store.get(record.run_id).active_child_pid is None
+    finally:
+        with contextlib.suppress(OSError):
+            os.kill(child.pid, 9)
+
+
+def test_dead_run_keeps_its_slot_when_orphan_cleanup_cannot_be_confirmed(
+    config, store, repo, monkeypatch
+):
+    from agent_duet import process_guard
+
+    record = start(config, store, repo)
+    store.transition(record.run_id, Phase.CLAUDE_IMPLEMENTING)
+    store.update(
+        record.run_id,
+        worker_pid=999_999_999,
+        worker_pgid=999_999_999,
+        worker_start_ticks="123",
+    )
+    store.set_active_child(
+        record.run_id,
+        pid=os.getpid(),
+        pgid=os.getpgrp(),
+        ticks=None,
+        label="phase1-claude",
+    )
+    monkeypatch.setattr(
+        process_guard,
+        "terminate_process_group",
+        lambda *args, **kwargs: "permission denied signalling process group",
+    )
+
+    assert _reap_dead_runs(store, str(repo)) == []
+    still_blocking = store.get(record.run_id)
+    assert still_blocking.phase is Phase.CLAUDE_IMPLEMENTING
+    assert still_blocking.active_child_pid == os.getpid()
 
 
 def test_reaping_leaves_a_live_run_alone(config, store, repo):

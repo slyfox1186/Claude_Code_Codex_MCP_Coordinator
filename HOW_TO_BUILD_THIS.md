@@ -168,12 +168,20 @@ parse back:
 | Installs `commands/duet.md` into `~/.claude/commands/` and `~/.codex/prompts/` | Copying two files |
 
 It backs up anything it overwrites to `<name>.duet-backup`, never uses `sudo`, and is safe
-to run repeatedly.
+to run repeatedly. Close and reopen Claude Code and Codex sessions that were already open
+during setup: a running client retains its old MCP subprocess and `/duet` prompt.
 
 `duet_wait` is hard-capped at 90 seconds so it returns before Claude Code's two-minute
 automatic MCP backgrounding threshold. The 120-second client timeout leaves room for
 transport overhead. The detached worker and its Claude/Codex phase timeouts are separate,
 so shorter polling never shortens model work.
+
+Each returned status includes a server-measured liveness object. `MODEL_ACTIVE` means both
+the detached worker and the expected child model process passed PID/start-time identity
+checks. A live worker without the expected child is `TRANSITIONING`; a vanished worker is
+reported as `WORKER_MISSING`, not repeated indefinitely as an active phase.
+`CLEANUP_REQUIRED` means a terminal run still has a recorded live child; another
+`duet_cancel` retries that cleanup while preserving the process identity until it is gone.
 
 **Checks**
 

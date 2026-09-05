@@ -22,6 +22,9 @@ history from non-ignored files without adding a remote or uploading anything.
 
 It finishes by printing two lines to copy.
 
+If setup updated an installation while either CLI was open, close and reopen that client
+before using `/duet`. The old process cannot reload its MCP subprocess or command file.
+
 ## 2. Run it
 
 ```bash
@@ -47,6 +50,13 @@ QUEUED -> CLAUDE_IMPLEMENTING -> HANDOFF_VALIDATING -> CODEX_REVIEWING
        -> REVIEW_INTEGRITY_CHECK -> CLAUDE_RECONCILING -> FINAL_VALIDATING
        -> AWAITING_FINALIZE
 ```
+
+Progress is trustworthy only when the returned status has the retained `run_id` and
+`liveness.state` is `MODEL_ACTIVE`. `TRANSITIONING` means the worker is alive but the
+expected model child was not verified at that instant. `WORKER_MISSING` is a failure, not
+a reason to keep polling.
+`CLEANUP_REQUIRED` means the run stopped but a child process remains; retry
+`duet_cancel` before starting another run.
 
 Then it **stops** and tells you what it did.
 

@@ -554,6 +554,8 @@ PY
 
 print_setup_complete() {
   printf '\n%sSetup is done.%s\n' "$G$B" "$N"
+  note "Close and reopen any Claude Code or Codex sessions that were already running."
+  info "Open sessions keep the old MCP process and /duet instructions loaded at startup."
   if [ -n "$PROJECT_DIR" ]; then
     info "Next: registering the project supplied with --directory"
   else
