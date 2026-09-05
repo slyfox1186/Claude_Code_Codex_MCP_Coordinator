@@ -722,11 +722,15 @@ def test_locked_dependencies_are_installed_before_editable_package(tmp_path: Pat
     result = _run_interactive_setup(cwd=tmp_path, env=env, answers="n\n\n")
 
     assert result.returncode == 0, result.stdout
+    assert "Installing locked dependencies (the first run can take a few minutes)" in result.stdout
+    assert "Installing Agent Duet itself" in result.stdout
     pip_calls = [line for line in python_log.read_text().splitlines() if " -m pip " in line]
     managed_python = tmp_path / "home/.local/share/agent-duet/venv/bin/python"
     assert pip_calls == [
-        f"{managed_python} -m pip install --quiet -r {PROJECT_ROOT / 'requirements-lock.txt'}",
-        f"{managed_python} -m pip install --quiet --no-deps --editable {PROJECT_ROOT}",
+        f"{managed_python} -m pip install --disable-pip-version-check -r "
+        f"{PROJECT_ROOT / 'requirements-lock.txt'}",
+        f"{managed_python} -m pip install --disable-pip-version-check --no-deps "
+        f"--editable {PROJECT_ROOT}",
     ]
     launcher = home / ".local/bin/agent-duet"
     assert launcher.is_symlink()
@@ -759,8 +763,105 @@ def test_failed_health_check_does_not_report_setup_complete(tmp_path: Path) -> N
 
     assert result.returncode == 1, result.stdout
     assert "not connected" in result.stdout
+    assert "Something is off. Run ./setup.sh to repair it." in result.stdout
     assert "Setup is done" not in result.stdout
     assert (home / ".config/agent-duet/config.toml").is_file()
+
+
+def test_codex_health_uses_validated_config_not_cli_display_text(tmp_path: Path) -> None:
+    _, _, _, _, env = _guided_setup_environment(tmp_path)
+    _write_executable(
+        tmp_path / "provider-templates/codex",
+        "#!/bin/bash\n"
+        '[[ "$*" == "--version" ]] && echo "codex-cli 0.153.2"\n'
+        '[[ "$*" == "login status" ]] && exit 0\n'
+        '[[ "$*" == "mcp get agent_duet" ]] && echo "agent_duet: enabled"\n'
+        "exit 0\n",
+    )
+
+    result = _run_interactive_setup(cwd=tmp_path, env=env, answers="n\n\n")
+
+    assert result.returncode == 0, result.stdout
+    assert "connected, all five tools enabled" in result.stdout
+    assert "not registered properly" not in result.stdout
+
+
+def test_codex_health_rejects_config_without_all_five_tools(tmp_path: Path) -> None:
+    home, env = _fake_install_environment(tmp_path)
+    codex_home = home / ".codex"
+    claude_commands = home / ".claude/commands"
+    codex_home.joinpath("prompts").mkdir(parents=True)
+    claude_commands.mkdir(parents=True)
+    codex_home.joinpath("prompts/duet.md").write_text("installed")
+    claude_commands.joinpath("duet.md").write_text("installed")
+    codex_home.joinpath("config.toml").write_text(
+        f'''[mcp_servers.agent_duet]
+command = "{tmp_path / "bin/agent-duet"}"
+tool_timeout_sec = 330
+enabled_tools = ["duet_start", "duet_status", "duet_wait", "duet_cancel"]
+'''
+    )
+
+    result = subprocess.run(
+        ["bash", str(PROJECT_ROOT / "setup.sh"), "check"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 1, result.stdout
+    assert "not registered properly" in result.stdout
+
+
+def test_codex_health_rejects_directory_as_command(tmp_path: Path) -> None:
+    home, env = _fake_install_environment(tmp_path)
+    codex_home = home / ".codex"
+    claude_commands = home / ".claude/commands"
+    codex_home.joinpath("prompts").mkdir(parents=True)
+    claude_commands.mkdir(parents=True)
+    codex_home.joinpath("prompts/duet.md").write_text("installed")
+    claude_commands.joinpath("duet.md").write_text("installed")
+    codex_home.joinpath("config.toml").write_text(
+        f'''[mcp_servers.agent_duet]
+command = "{tmp_path / "bin"}"
+tool_timeout_sec = 330
+enabled_tools = ["duet_start", "duet_status", "duet_wait", "duet_cancel", "duet_finalize"]
+'''
+    )
+
+    result = subprocess.run(
+        ["bash", str(PROJECT_ROOT / "setup.sh"), "check"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 1, result.stdout
+    assert "not registered properly" in result.stdout
+
+
+def test_claude_health_check_handles_large_trailing_output(tmp_path: Path) -> None:
+    _, _, _, _, env = _guided_setup_environment(tmp_path)
+    _write_executable(
+        tmp_path / "provider-templates/claude",
+        "#!/bin/bash\n"
+        '[[ "$*" == "--version" ]] && echo "2.1.236 (Claude Code)"\n'
+        '[[ "$*" == "auth status" ]] && exit 0\n'
+        'if [[ "$*" == "mcp get agent_duet" ]]; then\n'
+        '    echo "Connected"\n'
+        "    for ((i = 0; i < 20000; i++)); do echo \"trailing output $i\"; done\n"
+        "fi\n"
+        "exit 0\n",
+    )
+
+    result = _run_interactive_setup(cwd=tmp_path, env=env, answers="n\n\n")
+
+    assert result.returncode == 0, result.stdout
+    assert "Can Claude Code see it?\n    ✓ connected" in result.stdout
 
 
 def test_unsupported_os_fails_before_creating_python_environment(tmp_path: Path) -> None:

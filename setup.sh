@@ -387,9 +387,13 @@ do_install() {
   if [ -f "$REPO_ROOT/pyproject.toml" ]; then
     [ -f "$REPO_ROOT/requirements-lock.txt" ] \
       || die "$REPO_ROOT/requirements-lock.txt is missing."
-    "$PY" -m pip install --quiet -r "$REPO_ROOT/requirements-lock.txt" \
+    info "Installing locked dependencies (the first run can take a few minutes)..."
+    "$PY" -m pip install --disable-pip-version-check \
+      -r "$REPO_ROOT/requirements-lock.txt" \
       || die "locked dependency installation failed. Scroll up for the reason."
-    "$PY" -m pip install --quiet --no-deps --editable "$REPO_ROOT" \
+    info "Installing Agent Duet itself..."
+    "$PY" -m pip install --disable-pip-version-check --no-deps \
+      --editable "$REPO_ROOT" \
       || die "pip install failed. Scroll up for the reason."
     ok "installed from $REPO_ROOT"
   else
@@ -521,7 +525,9 @@ parsed = tomllib.loads(updated)                 # never write a broken codex con
 entry = parsed["mcp_servers"]["agent_duet"]
 assert entry["command"] == duet_bin, entry
 assert entry["tool_timeout_sec"] == 330, entry
-assert len(entry["enabled_tools"]) == 5, entry
+assert set(entry["enabled_tools"]) == {
+    "duet_start", "duet_status", "duet_wait", "duet_cancel", "duet_finalize"
+}, entry
 
 if original and original != updated:
     shutil.copy2(target, target.with_suffix(".toml.duet-backup"))
@@ -736,6 +742,43 @@ PY
 
 # ----------------------------------------------------------------- check ----
 
+codex_registration_is_valid() {
+  codex mcp get agent_duet >/dev/null 2>&1 || return 1
+  "$PY" - "$CODEX_HOME_DIR/config.toml" <<'PY'
+import os
+import pathlib
+import sys
+import tomllib
+
+required_tools = {
+    "duet_start",
+    "duet_status",
+    "duet_wait",
+    "duet_cancel",
+    "duet_finalize",
+}
+
+try:
+    config = tomllib.loads(pathlib.Path(sys.argv[1]).read_text())
+    entry = config["mcp_servers"]["agent_duet"]
+    command = entry["command"]
+    enabled_tools = entry["enabled_tools"]
+    tool_timeout = entry["tool_timeout_sec"]
+    valid = (
+        isinstance(command, str)
+        and pathlib.Path(command).is_absolute()
+        and pathlib.Path(command).is_file()
+        and os.access(command, os.X_OK)
+        and set(enabled_tools) == required_tools
+        and tool_timeout >= 330
+    )
+except (KeyError, OSError, TypeError, ValueError, tomllib.TOMLDecodeError):
+    valid = False
+
+raise SystemExit(0 if valid else 1)
+PY
+}
+
 do_check() {
   local failed=0
   step "Is agent-duet healthy?"
@@ -750,17 +793,20 @@ do_check() {
   fi
 
   step "Can Claude Code see it?"
-  if claude mcp get agent_duet 2>&1 | grep -q "Connected"; then
+  local claude_registration
+  if claude_registration="$(claude mcp get agent_duet 2>&1)" \
+      && grep -q "Connected" <<<"$claude_registration"; then
     ok "connected"
   else
-    warn "not connected — run ./setup.sh install"; failed=1
+    warn "not connected — run ./setup.sh"; failed=1
   fi
 
   step "Can Codex see it?"
-  if codex mcp get agent_duet 2>&1 | grep -q "duet_finalize"; then
+  PY="$(pick_python)"
+  if codex_registration_is_valid; then
     ok "connected, all five tools enabled"
   else
-    warn "not registered properly — run ./setup.sh install"; failed=1
+    warn "not registered properly — run ./setup.sh"; failed=1
   fi
 
   step "Is the /duet command installed?"
@@ -771,7 +817,7 @@ do_check() {
   if [ "$failed" -eq 0 ]; then
     printf '\n%sEverything works.%s\n\n' "$G$B" "$N"
   else
-    printf '\n%sSomething is off. Run ./setup.sh install to repair it.%s\n\n' "$Y" "$N"
+    printf '\n%sSomething is off. Run ./setup.sh to repair it.%s\n\n' "$Y" "$N"
     return 1
   fi
 }

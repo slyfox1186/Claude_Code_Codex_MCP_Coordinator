@@ -10,6 +10,8 @@ cd Claude_Code_Codex_MCP_Coordinator
 
 Follow the prompts. Setup explains each change and asks for consent before it:
 
+The first dependency install can take a few minutes. Setup keeps the download progress visible.
+
 - If Conda is detected, setup creates a dedicated environment named `agent-duet`.
   Setup never installs Conda or changes `base` or any existing environment.
 - Without Conda, setup uses the default Python 3.13+ only to create a private Agent Duet
