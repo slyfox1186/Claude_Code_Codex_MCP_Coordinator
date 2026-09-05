@@ -16,9 +16,11 @@ from agent_duet.git_guard import (
     combined_diff_sha256,
     fingerprint,
     inspect_repo,
+    local_branch_heads,
     lock_path_for,
     normalize_remote_url,
     repo_lock,
+    restore_local_branch_state,
     stage_paths,
     staged_paths,
 )
@@ -223,6 +225,54 @@ def test_fingerprint_detects_a_branch_switch(repo):
     before = fingerprint(repo)
     git("checkout", "-q", "-b", "other", cwd=repo)
     assert any("branch" in item for item in before.differences(fingerprint(repo)))
+
+
+def test_branch_restore_removes_only_a_new_active_branch(repo):
+    before = local_branch_heads(repo)
+    git("switch", "-q", "-c", "model-created", cwd=repo)
+
+    repaired = restore_local_branch_state(
+        repo,
+        expected_branch="main",
+        expected_heads=before,
+    )
+
+    assert any("switched active branch" in item for item in repaired)
+    assert git("branch", "--show-current", cwd=repo).stdout.strip() == "main"
+    assert git("branch", "--list", "model-created", cwd=repo).stdout.strip() == ""
+
+
+def test_branch_restore_does_not_touch_unrelated_branch_refs(repo):
+    before = local_branch_heads(repo)
+    git("branch", "human-created", cwd=repo)
+
+    assert (
+        restore_local_branch_state(
+            repo,
+            expected_branch="main",
+            expected_heads=before,
+        )
+        == []
+    )
+    assert git("branch", "--list", "human-created", cwd=repo).stdout.strip()
+
+
+def test_branch_restore_handles_branches_that_share_a_name_with_tags(repo):
+    git("branch", "existing", cwd=repo)
+    git("tag", "main", cwd=repo)
+    git("tag", "existing", cwd=repo)
+    before = local_branch_heads(repo)
+    assert set(before) == {"main", "existing"}
+    git("switch", "-q", "existing", cwd=repo)
+
+    restore_local_branch_state(
+        repo,
+        expected_branch="main",
+        expected_heads=before,
+    )
+
+    assert git("branch", "--show-current", cwd=repo).stdout.strip() == "main"
+    assert git("branch", "--list", "existing", cwd=repo).stdout.strip()
 
 
 # -- combined diff and owned paths -----------------------------------------

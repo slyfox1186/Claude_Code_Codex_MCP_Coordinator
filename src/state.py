@@ -175,9 +175,10 @@ def default_next_action(phase: Phase) -> str:
             return "Run cancelled. Nothing was committed, pushed, or deployed."
         case _:
             return (
-                "Still running. Call duet_wait once with this run_id and "
+                "The run remains active. Call duet_wait once with this run_id and "
                 f"timeout_seconds={FOREGROUND_WAIT_MAX_SECONDS}; wait for its result before "
-                "calling duet_wait or duet_status again."
+                "calling duet_wait or duet_status again. This timeout only polls status; "
+                "it does not limit Claude or Codex runtime."
             )
 
 

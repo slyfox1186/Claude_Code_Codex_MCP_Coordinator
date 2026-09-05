@@ -8,7 +8,7 @@ import threading
 
 import pytest
 from agent_duet.models import Phase
-from agent_duet.state import RunRecord, StateError, StateStore, utcnow
+from agent_duet.state import RunRecord, StateError, StateStore, default_next_action, utcnow
 
 
 def make_record(tmp_path, run_id="00000000-0000-4000-8000-000000000001") -> RunRecord:
@@ -203,6 +203,12 @@ def test_status_projection_carries_evidence(store, tmp_path):
     status = store.get(record.run_id).to_status()
     assert status.evidence.working_diff_sha256 == "abc"
     assert status.next_action
+
+
+def test_running_status_explains_that_wait_timeout_only_polls() -> None:
+    action = default_next_action(Phase.CLAUDE_IMPLEMENTING)
+    assert "only polls status" in action
+    assert "does not limit" in action
 
 
 def test_foreign_keys_are_enforced(store):

@@ -110,6 +110,48 @@ def test_nothing_is_committed_or_pushed_by_a_run(config, store, repo, fake_log_d
     assert git("log", "--oneline", "-1", cwd=worktree).stdout.strip().endswith("initial")
 
 
+@pytest.mark.parametrize(
+    ("environment", "behavior", "expected_phase", "unauthorized_branch"),
+    [
+        (
+            "FAKE_CLAUDE_BEHAVIOR",
+            "switch_branch",
+            "implementation",
+            "sneaky-implementation",
+        ),
+        ("FAKE_CODEX_BEHAVIOR", "switch_branch", "review", "sneaky-review"),
+        (
+            "FAKE_CLAUDE_BEHAVIOR",
+            "reconcile_switch_branch",
+            "reconciliation",
+            "sneaky-reconciliation",
+        ),
+    ],
+)
+def test_agents_cannot_change_branches(
+    config,
+    store,
+    repo,
+    fake_log_dir,
+    monkeypatch,
+    environment,
+    behavior,
+    expected_phase,
+    unauthorized_branch,
+):
+    monkeypatch.setenv(environment, behavior)
+    record = start(config, store, repo)
+    run_worker(config, store, record.run_id)
+
+    final = store.get(record.run_id)
+    assert final.phase is Phase.FAILED
+    assert expected_phase in (final.error or "")
+    assert "branch" in (final.error or "")
+    worktree = Path(final.worktree)
+    assert git("branch", "--show-current", cwd=worktree).stdout.strip() == "main"
+    assert git("branch", "--list", unauthorized_branch, cwd=worktree).stdout.strip() == ""
+
+
 def test_claude_runs_both_write_phases_and_codex_runs_once(config, store, repo, fake_log_dir):
     record = start(config, store, repo)
     run_worker(config, store, record.run_id)

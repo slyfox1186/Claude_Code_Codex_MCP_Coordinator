@@ -113,6 +113,12 @@ def main():
         if behavior == "reconcile_commit":
             subprocess.run(["git", "add", "-A"], cwd=cwd, check=False)
             subprocess.run(["git", "commit", "-m", "sneaky"], cwd=cwd, check=False)
+        if behavior == "reconcile_switch_branch":
+            subprocess.run(
+                ["git", "switch", "-q", "-c", "sneaky-reconciliation"],
+                cwd=cwd,
+                check=False,
+            )
         (cwd / "impl.py").write_text(
             '"""Addition helper."""\n\n\ndef add(a, b):\n    """Return a + b."""\n    return a + b\n'
         )
@@ -155,6 +161,16 @@ def main():
             check=False,
         )
         emit("added a remote")
+        return 0
+    if behavior == "switch_branch":
+        (cwd / "impl.py").write_text("def add(a, b):\n    return a + b\n")
+        (cwd / HANDOFF).write_text(HANDOFF_BODY)
+        subprocess.run(
+            ["git", "switch", "-q", "-c", "sneaky-implementation"],
+            cwd=cwd,
+            check=False,
+        )
+        emit("switched branches")
         return 0
     if behavior == "secret":
         (cwd / "leak.py").write_text('GITHUB_TOKEN = "ghp_' + "A" * 36 + '"\n')

@@ -42,8 +42,10 @@ from .git_guard import (
     combined_diff_sha256,
     fingerprint,
     inspect_repo,
+    local_branch_heads,
     owned_tree_sha,
     repo_lock,
+    restore_local_branch_state,
     run_git,
 )
 from .logging_setup import setup_logging
@@ -178,6 +180,27 @@ class Worker:
             logger.warning("could not read the cancel flag for run %s", self.run_id)
             return False
 
+    def _enforce_branch_state(
+        self,
+        worktree: Path,
+        *,
+        expected_heads: dict[str, str],
+        phase: str,
+    ) -> None:
+        expected_branch = self.record.branch
+        if not expected_branch:
+            raise PhaseFailure("the run record has no coordinator-selected branch")
+        repaired = restore_local_branch_state(
+            worktree,
+            expected_branch=expected_branch,
+            expected_heads=expected_heads,
+        )
+        if repaired:
+            raise PhaseFailure(
+                f"the {phase} phase changed coordinator-owned branch state "
+                f"({'; '.join(repaired)}); the original state was restored"
+            )
+
     # -- entry point -------------------------------------------------------
 
     async def execute(self) -> None:
@@ -221,21 +244,22 @@ class Worker:
         _pin_templates(self._run_dir())
         worktree = self._prepare_worktree(repo)
         logger.info("run %s: working tree is %s", self.run_id, worktree)
+        branch_heads = local_branch_heads(worktree)
         self._check_cancel()
 
-        await self._phase_implement(worktree)
+        await self._phase_implement(worktree, branch_heads)
         self._check_cancel()
 
         handoff_digest = self._phase_validate_handoff(worktree)
         self._check_cancel()
 
-        critique_text, integrity_note = await self._phase_review(worktree)
+        critique_text, integrity_note = await self._phase_review(worktree, branch_heads)
         self._check_cancel()
 
         critique_digest = self._phase_write_critique(worktree, critique_text)
         self._check_cancel()
 
-        proposed_message = await self._phase_reconcile(worktree, integrity_note)
+        proposed_message = await self._phase_reconcile(worktree, integrity_note, branch_heads)
         self._check_cancel()
 
         self._phase_final_validation(
@@ -316,12 +340,15 @@ class Worker:
 
     # -- phase 1 -----------------------------------------------------------
 
-    async def _phase_implement(self, worktree: Path) -> None:
+    async def _phase_implement(self, worktree: Path, branch_heads: dict[str, str]) -> None:
         record = self.store.transition(
             self.run_id,
             Phase.CLAUDE_IMPLEMENTING,
             reason="starting the implementation phase",
-            summary="Claude is implementing the task.",
+            summary=(
+                "Phase 1 of 3: Claude is actively implementing. This is not the final "
+                "step and may take hours for a broad task."
+            ),
         )
         info = inspect_repo(worktree)
         phase_timeout = self._phase_timeout_seconds(self.config.claude.timeout_seconds)
@@ -358,6 +385,11 @@ class Worker:
             on_spawn=_spawn_0,
             on_exit=_exit_0,
         )
+        self._enforce_branch_state(
+            worktree,
+            expected_heads=branch_heads,
+            phase="implementation",
+        )
         if result.cancelled:
             raise Cancelled("cancelled during the implementation phase")
         if result.timed_out:
@@ -381,7 +413,7 @@ class Worker:
             self.run_id,
             Phase.HANDOFF_VALIDATING,
             reason="checking the implementation handoff and repository invariants",
-            summary="Validating the implementation handoff.",
+            summary="Between phases 1 and 2: validating Claude's implementation handoff.",
         )
         info = inspect_repo(worktree)
         base = record.base_sha or ""
@@ -389,6 +421,11 @@ class Worker:
             raise PhaseFailure(
                 f"the implementation phase moved HEAD from {base[:12]} to "
                 f"{info.head_sha[:12]}; committing is the coordinator's job, not the agent's"
+            )
+        if info.branch != record.branch:
+            raise PhaseFailure(
+                f"the implementation phase switched branch from {record.branch!r} to "
+                f"{info.branch!r}; branch selection is coordinator-owned"
             )
         expected_remotes = json.loads(
             json.dumps(record.evidence.get("start_remotes", info.remotes))
@@ -414,12 +451,14 @@ class Worker:
 
     # -- phase 2 -----------------------------------------------------------
 
-    async def _phase_review(self, worktree: Path) -> tuple[str, str]:
+    async def _phase_review(
+        self, worktree: Path, branch_heads: dict[str, str]
+    ) -> tuple[str, str]:
         record = self.store.transition(
             self.run_id,
             Phase.CODEX_REVIEWING,
             reason="starting the independent review phase",
-            summary="Codex is reviewing the change.",
+            summary="Phase 2 of 3: Codex is independently reviewing Claude's work.",
         )
         before = fingerprint(worktree)
         run_dir = self._run_dir()
@@ -467,6 +506,11 @@ class Worker:
             cancel_check=self._cancel_requested,
             on_spawn=_spawn_1,
             on_exit=_exit_1,
+        )
+        self._enforce_branch_state(
+            worktree,
+            expected_heads=branch_heads,
+            phase="review",
         )
         if result.cancelled:
             raise Cancelled("cancelled during the review phase")
@@ -525,7 +569,7 @@ class Worker:
             self.run_id,
             Phase.REVIEW_INTEGRITY_CHECK,
             reason=f"comparing pre/post review fingerprints ({event_count} events parsed)",
-            summary="Checking that the review did not change the repository.",
+            summary="Between phases 2 and 3: checking that Codex changed no project state.",
             evidence={
                 "codex_readonly_verified": not mutations,
                 "codex_mutations_detected": mutations,
@@ -534,6 +578,16 @@ class Worker:
         if not mutations:
             return ""
         detail = "; ".join(mutations)
+        protected = tuple(
+            item
+            for item in mutations
+            if item.startswith(("HEAD ", "branch ", "remotes "))
+        )
+        if protected:
+            raise PhaseFailure(
+                "the review phase changed coordinator-owned Git state "
+                f"({'; '.join(protected)}); branch, HEAD, and remotes must remain unchanged"
+            )
         if self.config.codex.write_policy == "fail":
             raise PhaseFailure(
                 f"the reviewer mutated the repository ({detail}); write_policy=fail"
@@ -575,12 +629,20 @@ class Worker:
 
     # -- phase 3 -----------------------------------------------------------
 
-    async def _phase_reconcile(self, worktree: Path, integrity_note: str) -> str:
+    async def _phase_reconcile(
+        self,
+        worktree: Path,
+        integrity_note: str,
+        branch_heads: dict[str, str],
+    ) -> str:
         record = self.store.transition(
             self.run_id,
             Phase.CLAUDE_RECONCILING,
             reason="starting the reconciliation phase",
-            summary="Claude is adjudicating the critique and fixing justified findings.",
+            summary=(
+                "Phase 3 of 3: Claude is adjudicating Codex's review and fixing "
+                "justified findings."
+            ),
         )
         info = inspect_repo(worktree)
         phase_timeout = self._phase_timeout_seconds(self.config.claude.timeout_seconds)
@@ -616,6 +678,11 @@ class Worker:
             on_spawn=_spawn_2,
             on_exit=_exit_2,
         )
+        self._enforce_branch_state(
+            worktree,
+            expected_heads=branch_heads,
+            phase="reconciliation",
+        )
         if result.cancelled:
             raise Cancelled("cancelled during the reconciliation phase")
         if result.timed_out:
@@ -647,7 +714,7 @@ class Worker:
             self.run_id,
             Phase.FINAL_VALIDATING,
             reason="running the coordinator's own validation commands",
-            summary="Running configured validation commands.",
+            summary="After phase 3: running configured validation commands before approval.",
         )
         run_dir = self._run_dir()
 
@@ -664,6 +731,11 @@ class Worker:
             raise PhaseFailure(
                 f"HEAD moved to {info.head_sha[:12]} during reconciliation; the "
                 "coordinator owns committing"
+            )
+        if info.branch != record.branch:
+            raise PhaseFailure(
+                f"the reconciliation phase switched branch from {record.branch!r} to "
+                f"{info.branch!r}; branch selection is coordinator-owned"
             )
         # The reconciliation phase is write-capable, so the remote set is re-checked
         # here as well. A rewritten remote would otherwise reach finalization, where the

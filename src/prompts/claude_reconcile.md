@@ -1,10 +1,10 @@
-You are again the implementation owner, in a fresh session, at {worktree}.
+You are again the implementation owner, in a fresh session, at `{worktree}`.
 
 Repository facts supplied by the coordinator (authoritative):
-- canonical repository: {repo_path}
-- working branch: {branch}
-- baseline HEAD: {base_sha}
-- current HEAD: {current_sha}
+- canonical repository: `{repo_path}`
+- working branch: `{branch}`
+- baseline `HEAD`: `{base_sha}`
+- current `HEAD`: `{current_sha}`
 {review_integrity_note}
 
 ## Original task
@@ -21,7 +21,7 @@ Root every filesystem search, listing, and glob at your working root above. Read
 it only for a specific file you have a concrete reason to open. A search from `/` or `$HOME`
 crosses every mounted volume on this machine, external drives included; one did, and sat
 there for 27 minutes producing nothing. The phase safety ceiling is
-{timeout_description}. It is a runaway-work guard, not a target; use the available time
+`{timeout_description}`. It is a runaway-work guard, not a target; use the available time
 deliberately.
 
 Read `./{handoff_filename}`, `./{critique_filename}`, project instructions, and all relevant
@@ -41,6 +41,9 @@ status. Remove temporary or generated files and make sure no secrets and no unre
 changes remain.
 
 ## Boundaries
+
+Do not create, switch, rename, or delete branches; remain on `{branch}`. Branch
+selection is coordinator-owned.
 
 Do not commit, push, deploy, alter remotes, rewrite history, or invoke MCP tools. The
 coordinator owns finalization and will run the repository's configured validation

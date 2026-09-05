@@ -3,6 +3,7 @@
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -98,6 +99,12 @@ def main():
     workdir = cd_path(argv)
     if behavior == "mutate":
         (workdir / "reviewer_touched.txt").write_text("the reviewer wrote this\n")
+    if behavior == "switch_branch":
+        subprocess.run(
+            ["git", "switch", "-q", "-c", "sneaky-review"],
+            cwd=workdir,
+            check=False,
+        )
 
     text = CRITIQUE
     if behavior == "short":

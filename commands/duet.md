@@ -60,7 +60,7 @@ as the tool going behind their back.
 ## What to do
 
 1. **Determine the repository.** Use the current working directory's repository root. It
-   must sit below an `allowed_repo_roots` entry in the user's agent-duet config, or
+   must sit below an `allowed_repo_roots` entry in the user's `agent-duet` config, or
    `duet_start` will refuse. If it refuses for that reason, tell the user which root is
    missing rather than trying to work around it.
 
@@ -71,6 +71,11 @@ as the tool going behind their back.
 3. **Call `duet_start` exactly once.** Keep the returned `run_id`. Never start a second
    run for the same task; if you think you need one, stop and ask.
 
+   Translate the returned delivery mode when you report the start. For `direct_branch`,
+   say **"using existing branch `<branch>`; no new branch"**. Do not say "direct branch
+   off main" or otherwise imply that `direct_branch` creates a branch. For
+   `review_branch`, plainly say that the user-requested new review branch is being used.
+
 4. **Poll with `duet_wait`**, passing that `run_id` and `timeout_seconds=90`. Keep
    exactly one `duet_wait` call in flight for the run: wait for its result before calling
    `duet_wait` or `duet_status` again. If the client moves the call to a background task,
@@ -79,6 +84,20 @@ as the tool going behind their back.
    report the phase in one short line so the user can see progress. The detached model
    work continues independently and can take hours; the 90-second value limits only one
    status poll, not Claude's or Codex's work.
+
+   Never report a raw phase enum by itself, and never say only "Still
+   `CLAUDE_IMPLEMENTING`." Translate active model phases into meaningful progress:
+
+   - `CLAUDE_IMPLEMENTING`: **Phase 1 of 3 — Claude is actively implementing. This is
+     not the final step and may take hours for a broad task.**
+   - `CODEX_REVIEWING`: **Phase 2 of 3 — Codex is independently reviewing Claude's
+     work.**
+   - `CLAUDE_RECONCILING`: **Phase 3 of 3 — Claude is adjudicating Codex's review and
+     fixing justified findings.**
+
+   For a validation phase, say which two model phases it sits between or that final
+   validation follows phase 3. Repeating a phase means that phase remains active; it
+   does not mean the run is finished or that its model was stopped.
 
 5. **At `AWAITING_FINALIZE`, stop and report.** Summarize, from the returned evidence
    only:

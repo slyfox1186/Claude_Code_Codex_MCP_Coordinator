@@ -47,8 +47,9 @@ one is enforced by code:
               it STOPS and reports  ──▶  you approve  ──▶  commit (+ optional push)
 ```
 
-Expect **5 to 20 minutes**. Three real AI sessions run end to end. That is normal, and the
-work keeps going even if you close your terminal.
+A focused change often takes **5 to 20 minutes**. A whole-project audit can take hours.
+Three real AI sessions run end to end, and the work keeps going if you close your
+terminal.
 
 ---
 
@@ -194,6 +195,10 @@ and the exact diff fingerprint that was validated before it will touch anything.
 ---
 
 ## Phases
+
+User-facing updates identify the three model phases plainly: **Phase 1 of 3 — Claude
+implements**, **Phase 2 of 3 — Codex reviews**, and **Phase 3 of 3 — Claude reconciles**.
+Phase 1 is not the final step. The names below are the internal state-machine values.
 
 ```
 QUEUED -> CLAUDE_IMPLEMENTING -> HANDOFF_VALIDATING -> CODEX_REVIEWING

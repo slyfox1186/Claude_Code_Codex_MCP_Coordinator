@@ -105,11 +105,61 @@ def test_every_child_is_told_to_work_deliberately_until_its_role_is_complete(nam
     assert "first plausible" in text
 
 
+@pytest.mark.parametrize("name", TEMPLATES)
+def test_every_child_is_forbidden_from_changing_branches(name):
+    text = " ".join((PROMPTS / name).read_text().lower().split())
+    assert "do not create, switch, rename, or delete branches" in text
+    assert "{branch}" in text
+
+
+@pytest.mark.parametrize(
+    ("name", "placeholders"),
+    [
+        (
+            "claude_implement.md",
+            (
+                "worktree",
+                "repo_path",
+                "branch",
+                "base_sha",
+                "upstream",
+                "delivery_mode",
+                "starting_status",
+                "timeout_description",
+            ),
+        ),
+        (
+            "codex_review.md",
+            ("worktree", "base_sha", "current_sha", "branch", "timeout_description"),
+        ),
+        (
+            "claude_reconcile.md",
+            ("worktree", "repo_path", "branch", "base_sha", "current_sha", "timeout_description"),
+        ),
+    ],
+)
+def test_authoritative_prompt_values_are_formatted_as_literals(name, placeholders):
+    text = (PROMPTS / name).read_text()
+    for placeholder in placeholders:
+        assert f"`{{{placeholder}}}`" in text
+
+
 def test_duet_command_keeps_only_one_foreground_safe_wait_in_flight():
     text = (ROOT / "commands" / "duet.md").read_text()
     assert "timeout_seconds=90" in text
     assert "exactly one `duet_wait` call in flight" in text
     assert "background task" in text
+
+
+def test_duet_command_translates_internal_states_into_numbered_progress():
+    text = (ROOT / "commands" / "duet.md").read_text()
+    assert "Phase 1 of 3" in text
+    assert "Phase 2 of 3" in text
+    assert "Phase 3 of 3" in text
+    assert "not the final step" in text
+    assert "using existing branch" in text
+    assert "no new branch" in text
+    assert "Never report a raw phase enum by itself" in text
 
 
 def test_server_instructions_keep_the_whole_critical_contract_in_512_characters():

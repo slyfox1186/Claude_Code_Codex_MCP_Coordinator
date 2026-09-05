@@ -93,6 +93,11 @@ simultaneously, cannot run concurrent writers against one repository.
 place, so it refuses a dirty working tree and a detached HEAD rather than mixing its work
 with yours. `review_branch` mode works in a private worktree on its own
 `agent-duet/<short-run-id>` branch, so pre-existing changes are never swept in.
+Every child is told to remain on the coordinator-selected branch. The coordinator checks
+that branch after each model phase; if a child switches away, it restores the selected
+branch, removes a newly created active side branch, and fails before finalization. It never
+rewrites unrelated branches shared by other worktrees. `direct_branch` therefore cannot
+leave or publish a model-created active side branch.
 
 ## Claims are never evidence
 

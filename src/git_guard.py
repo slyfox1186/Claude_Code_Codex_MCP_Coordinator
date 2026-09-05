@@ -249,9 +249,10 @@ def inspect_repo(repo_path: Path) -> RepoInfo:
         )
     head_sha = head.stdout.strip()
 
-    symbolic = run_git(["symbolic-ref", "--quiet", "--short", "HEAD"], cwd=canonical, check=False)
+    symbolic = run_git(["symbolic-ref", "--quiet", "HEAD"], cwd=canonical, check=False)
     detached = not symbolic.ok
-    branch = None if detached else symbolic.stdout.strip()
+    branch_ref = symbolic.stdout.strip()
+    branch = None if detached else branch_ref.removeprefix("refs/heads/")
 
     upstream_res = run_git(
         ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
@@ -343,8 +344,9 @@ def fingerprint(worktree: Path) -> Fingerprint:
         parts = line.split()
         if len(parts) >= 2:
             remotes.setdefault(parts[0], parts[1])
-    symbolic = run_git(["symbolic-ref", "--quiet", "--short", "HEAD"], cwd=worktree, check=False)
-    branch = symbolic.stdout.strip() if symbolic.ok else None
+    symbolic = run_git(["symbolic-ref", "--quiet", "HEAD"], cwd=worktree, check=False)
+    branch_ref = symbolic.stdout.strip()
+    branch = branch_ref.removeprefix("refs/heads/") if symbolic.ok else None
     return Fingerprint(
         head_sha=head,
         porcelain_sha256=_sha256_text(porcelain),
@@ -353,6 +355,78 @@ def fingerprint(worktree: Path) -> Fingerprint:
         remotes=remotes,
         branch=branch,
     )
+
+
+def local_branch_heads(worktree: Path) -> dict[str, str]:
+    """Return every local branch and its current commit.
+
+    The active branch alone is insufficient evidence: a child can create a side branch
+    and switch back before the coordinator inspects the repository.
+    """
+    result = run_git(
+        ["for-each-ref", "--format=%(refname) %(objectname)", "refs/heads"],
+        cwd=worktree,
+    )
+    prefix = "refs/heads/"
+    return {
+        full_name.removeprefix(prefix): sha
+        for line in result.stdout.splitlines()
+        if line.strip()
+        for full_name, sha in [line.split(" ", 1)]
+        if full_name.startswith(prefix)
+    }
+
+
+def restore_local_branch_state(
+    worktree: Path,
+    *,
+    expected_branch: str,
+    expected_heads: dict[str, str],
+) -> list[str]:
+    """Restore the coordinator-owned branch and report what was repaired.
+
+    Local refs are shared by every worktree. Other branches may therefore legitimately
+    move while a private review worktree is active, so this function never resets or
+    deletes them. It removes an unauthorized active branch only when that ref did not
+    exist before the model phase; switching this worktree to that new ref proves the ref
+    belongs to the model-owned checkout. ``git switch --merge`` preserves uncommitted
+    model work while returning the checkout to the selected branch.
+    """
+    info = inspect_repo(worktree)
+    actual_heads = local_branch_heads(worktree)
+    changes: list[str] = []
+    if info.branch != expected_branch:
+        changes.append(f"switched active branch from {info.branch!r} to {expected_branch!r}")
+
+    expected_sha = expected_heads.get(expected_branch)
+    if expected_sha is None:
+        raise GitError(f"recorded branch {expected_branch!r} is missing from the branch baseline")
+    if actual_heads.get(expected_branch) != expected_sha:
+        changes.append(f"moved HEAD for branch {expected_branch!r}")
+    if not changes:
+        return []
+
+    unauthorized_branch = info.branch
+    remove_unauthorized = bool(
+        unauthorized_branch
+        and unauthorized_branch != expected_branch
+        and unauthorized_branch not in expected_heads
+    )
+
+    # Recreate/reset the selected ref before switching in case the child deleted or
+    # moved it. Updating the ref leaves the index and worktree intact.
+    run_git(["update-ref", f"refs/heads/{expected_branch}", expected_sha], cwd=worktree)
+    if info.branch != expected_branch:
+        run_git(["switch", "--quiet", "--merge", expected_branch], cwd=worktree)
+
+    if remove_unauthorized and unauthorized_branch:
+        run_git(["update-ref", "-d", f"refs/heads/{unauthorized_branch}"], cwd=worktree)
+
+    restored = inspect_repo(worktree)
+    restored_heads = local_branch_heads(worktree)
+    if restored.branch != expected_branch or restored_heads.get(expected_branch) != expected_sha:
+        raise GitError("could not restore the coordinator-owned branch")
+    return changes
 
 
 def combined_diff_sha256(
