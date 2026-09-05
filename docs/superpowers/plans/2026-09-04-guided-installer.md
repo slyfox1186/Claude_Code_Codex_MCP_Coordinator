@@ -80,7 +80,7 @@ Expected: FAIL because setup currently installs directly into whichever interpre
 
 - [ ] **Step 3: Implement isolated environment selection**
 
-Add `ask_consent` with a conservative `[y/N]` default. Honor a compatible `DUET_PYTHON`. Otherwise detect Conda from `CONDA_EXE`, an executable `command -v conda` result, or `$HOME/miniconda3/bin/conda`. Resolve its base path and create or reuse `<base>/envs/agent-duet` using `conda create --name agent-duet -y python=3.13 pip`. If repair is needed, target only `-n agent-duet`.
+Add `ask_consent` with a conservative `[y/N]` default. Detect Conda from `CONDA_EXE`, an executable `command -v conda` result, or `$HOME/miniconda3/bin/conda`, and give it precedence over any `DUET_PYTHON` override. Resolve its base path and create or reuse `<base>/envs/agent-duet` using `conda create --name agent-duet -y python=3.13 pip`. If repair is needed, target only `-n agent-duet`.
 
 If Conda is absent, require the default `python3` to be 3.13 or newer and create a private virtual environment at `${XDG_DATA_HOME:-$HOME/.local/share}/agent-duet/venv`. All dependency installation then uses that environment's absolute Python. Never install Conda, call `sudo`, modify `base`, or run pip against system Python.
 

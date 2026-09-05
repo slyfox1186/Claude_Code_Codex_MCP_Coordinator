@@ -11,10 +11,13 @@ cd Claude_Code_Codex_MCP_Coordinator/     # the folder you cloned
 ./setup.sh
 ```
 
-Answer `y` when it offers to build a throwaway project. That is it — the script installs
-everything, writes your config, registers agent-duet with both Claude Code and Codex,
-installs the `/duet` command, and creates a tiny practice project so your first run is not
-against something you care about.
+Approve any required isolated environment or missing CLI installation, then answer `y`
+when it offers to build a throwaway project. The script writes your config, registers
+agent-duet with both Claude Code and Codex, installs the `/duet` command, and creates a
+tiny practice project so your first run is not against something you care about.
+
+If you answer `n` to the demo, setup asks for the relative or full path to your real Git
+repository. Press Enter without a path to skip it.
 
 It finishes by printing two lines to copy.
 

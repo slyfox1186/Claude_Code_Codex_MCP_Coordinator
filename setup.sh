@@ -29,6 +29,8 @@ DEMO_REPO="$DEMO_ROOT/smoke"
 DEMO_REMOTE="$DEMO_ROOT/smoke-remote.git"
 
 ASSUME_YES=false
+AUTH_PENDING=false
+INSTALL_TEMP_DIR=""
 
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
   B=$'\033[1m'; G=$'\033[32m'; Y=$'\033[33m'; R=$'\033[31m'; D=$'\033[2m'; N=$'\033[0m'
@@ -45,7 +47,8 @@ die()  { printf '\n%serror:%s %s\n\n' "$R" "$N" "$*" >&2; exit 1; }
 
 ask_yes() {  # ask_yes "question" -> 0 for yes
   local prompt="$1"
-  if [ "$ASSUME_YES" = true ] || [ ! -t 0 ]; then return 0; fi
+  if [ "$ASSUME_YES" = true ]; then return 0; fi
+  if [ ! -t 0 ]; then return 1; fi
   local reply
   read -r -p "    $prompt [Y/n] " reply || true
   case "${reply:-y}" in [Nn]*) return 1 ;; *) return 0 ;; esac
@@ -62,6 +65,13 @@ ask_consent() {  # Third-party or environment changes default to no.
 not_completed() {
   printf '\n%sinstallation not completed.%s Nothing was changed by this step.\n\n' "$Y" "$N" >&2
   exit 2
+}
+
+cleanup_install_temp() {
+  if [ -n "$INSTALL_TEMP_DIR" ] && [ -d "$INSTALL_TEMP_DIR" ]; then
+    rm -rf -- "$INSTALL_TEMP_DIR"
+  fi
+  INSTALL_TEMP_DIR=""
 }
 
 prompt_for_repo() {
@@ -127,12 +137,6 @@ installed_agent_python() {
 prepare_python_environment() {
   local conda_bin conda_base env_python system_python existing_python
 
-  if [ -n "${DUET_PYTHON:-}" ]; then
-    python_is_compatible "$DUET_PYTHON" \
-      || die "$DUET_PYTHON is too old. agent-duet needs Python 3.13 or newer."
-    return 0
-  fi
-
   conda_bin="$(find_conda || true)"
   if [ -n "$conda_bin" ]; then
     conda_base="$("$conda_bin" info --base 2>/dev/null || true)"
@@ -161,6 +165,12 @@ prepare_python_environment() {
     DUET_PYTHON="$env_python"
     export DUET_PYTHON
     ok "dedicated environment ready: $env_python"
+    return 0
+  fi
+
+  if [ -n "${DUET_PYTHON:-}" ]; then
+    python_is_compatible "$DUET_PYTHON" \
+      || die "$DUET_PYTHON is too old. agent-duet needs Python 3.13 or newer."
     return 0
   fi
 
@@ -202,7 +212,6 @@ prepare_python_environment() {
 }
 
 pick_python() {
-  if [ -n "${DUET_PYTHON:-}" ]; then echo "$DUET_PYTHON"; return; fi
   local bin conda_bin conda_base
   conda_bin="$(find_conda || true)"
   if [ -n "$conda_bin" ]; then
@@ -211,6 +220,7 @@ pick_python() {
     if python_is_compatible "$bin"; then echo "$bin"; return; fi
     die "the dedicated Python environment is missing; run ./setup.sh first."
   fi
+  if [ -n "${DUET_PYTHON:-}" ]; then echo "$DUET_PYTHON"; return; fi
   if python_is_compatible "$VENV_DIR/bin/python"; then
     echo "$VENV_DIR/bin/python"
     return
@@ -225,6 +235,128 @@ require_python_version() {
 import sys
 raise SystemExit(0 if sys.version_info >= (3, 13) else 1)
 PY
+}
+
+# ---------------------------------------------------------- provider CLIs ----
+
+refresh_user_path() {
+  local directory
+  for directory in "$HOME/.local/bin" "$HOME/.claude/local/bin" "$HOME/.codex/bin"; do
+    case ":$PATH:" in
+      *":$directory:"*) ;;
+      *) PATH="$directory:$PATH" ;;
+    esac
+  done
+  export PATH
+  hash -r
+}
+
+download_installer() {
+  local url="$1" destination="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$url" -o "$destination"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$destination" "$url"
+  else
+    die "install curl or wget, then run ./setup.sh again."
+  fi
+}
+
+install_provider_cli() {
+  local label="$1" command_name="$2" url="$3"
+  refresh_user_path
+  if command -v "$command_name" >/dev/null 2>&1; then return 0; fi
+
+  step "Installing $label"
+  info "$label is not installed. The official installer is:"
+  info "  $url"
+  info "It installs for your user account only; setup.sh never uses sudo."
+  if ! ask_consent "Download and run this official installer now?"; then not_completed; fi
+
+  INSTALL_TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/agent-duet-install.XXXXXX")" \
+    || die "could not create a temporary installer directory."
+  trap cleanup_install_temp EXIT
+  if ! download_installer "$url" "$INSTALL_TEMP_DIR/install.sh"; then
+    die "could not download $url"
+  fi
+  if ! bash "$INSTALL_TEMP_DIR/install.sh"; then
+    die "$label's official installer failed."
+  fi
+  cleanup_install_temp
+  trap - EXIT
+  refresh_user_path
+  command -v "$command_name" >/dev/null 2>&1 \
+    || die "$label installed, but '$command_name' is still not on PATH. Open a new terminal and retry."
+  ok "$label installed"
+}
+
+prepare_provider_clis() {
+  [ "$(uname -s)" = "Linux" ] || die "the guided installer currently supports Linux only."
+  command -v git >/dev/null 2>&1 || die "git was not found. Install Git, then run ./setup.sh again."
+  install_provider_cli "Claude Code" "claude" "https://claude.ai/install.sh"
+  install_provider_cli "Codex" "codex" "https://chatgpt.com/codex/install.sh"
+}
+
+offer_provider_logins() {
+  local codex_login="codex login"
+
+  if claude auth status >/dev/null 2>&1; then
+    ok "Claude Code is signed in"
+  else
+    warn "Claude Code is not signed in."
+    if [ ! -t 0 ]; then
+      info "Later, run: claude auth login"
+      AUTH_PENDING=true
+    elif ask_consent "Start Claude Code sign-in now?"; then
+      claude auth login || die "Claude Code sign-in did not finish successfully."
+      ok "Claude Code sign-in finished"
+    else
+      info "Later, run: claude auth login"
+      AUTH_PENDING=true
+    fi
+  fi
+
+  if [ ! -t 0 ] || [ -n "${SSH_CONNECTION:-}${SSH_TTY:-}" ] || \
+     { [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; }; then
+    codex_login="codex login --device-auth"
+  fi
+  if codex login status >/dev/null 2>&1; then
+    ok "Codex is signed in"
+  else
+    warn "Codex is not signed in."
+    if [ ! -t 0 ]; then
+      info "Later, run: $codex_login"
+      AUTH_PENDING=true
+    elif ask_consent "Start Codex sign-in now?"; then
+      if [ "$codex_login" = "codex login --device-auth" ]; then
+        codex login --device-auth || die "Codex sign-in did not finish successfully."
+      else
+        codex login || die "Codex sign-in did not finish successfully."
+      fi
+      ok "Codex sign-in finished"
+    else
+      info "Later, run: $codex_login"
+      AUTH_PENDING=true
+    fi
+  fi
+}
+
+install_agent_launcher() {
+  local duet_bin="$1" launcher="$HOME/.local/bin/agent-duet"
+  if [ "$duet_bin" = "$launcher" ]; then return 0; fi
+  mkdir -p "$(dirname "$launcher")"
+  if [ -L "$launcher" ] && [ "$(readlink "$launcher")" = "$duet_bin" ]; then
+    return 0
+  fi
+  [ ! -d "$launcher" ] || die "$launcher is a directory; move it aside and retry."
+  if [ -e "$launcher" ] || [ -L "$launcher" ]; then
+    cp -P "$launcher" "$launcher.duet-backup" \
+      || die "could not back up the existing $launcher."
+    note "backed up your old agent-duet launcher"
+  fi
+  ln -sfn "$duet_bin" "$launcher" || die "could not create $launcher."
+  refresh_user_path
+  ok "command launcher  $launcher"
 }
 
 # --------------------------------------------------------------- install ----
@@ -246,7 +378,11 @@ do_install() {
 
   step "Installing agent-duet"
   if [ -f "$REPO_ROOT/pyproject.toml" ]; then
-    "$PY" -m pip install --quiet --editable "$REPO_ROOT" \
+    [ -f "$REPO_ROOT/requirements-lock.txt" ] \
+      || die "$REPO_ROOT/requirements-lock.txt is missing."
+    "$PY" -m pip install --quiet -r "$REPO_ROOT/requirements-lock.txt" \
+      || die "locked dependency installation failed. Scroll up for the reason."
+    "$PY" -m pip install --quiet --no-deps --editable "$REPO_ROOT" \
       || die "pip install failed. Scroll up for the reason."
     ok "installed from $REPO_ROOT"
   else
@@ -256,10 +392,13 @@ do_install() {
   fi
 
   local duet_bin
-  duet_bin="$("$PY" -c 'import shutil,sys; p=shutil.which("agent-duet"); print(p or "", end="")')"
-  [ -n "$duet_bin" ] || duet_bin="$(dirname "$PY")/agent-duet"
+  duet_bin="$(dirname "$PY")/agent-duet"
+  if [ ! -x "$duet_bin" ]; then
+    duet_bin="$("$PY" -c 'import shutil; p=shutil.which("agent-duet"); print(p or "", end="")')"
+  fi
   [ -x "$duet_bin" ] || die "agent-duet installed but $duet_bin is not executable."
   ok "agent-duet  $duet_bin"
+  install_agent_launcher "$duet_bin"
 
   step "Writing your configuration"
   mkdir -p "$CONFIG_DIR" "$STATE_DIR"
@@ -736,31 +875,44 @@ do_uninstall() {
 
 # ------------------------------------------------------------------ main ----
 
-ARGS=()
-for arg in "$@"; do
-  case "$arg" in
-    -y|--yes)  ASSUME_YES=true ;;
-    -h|--help) sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *)         ARGS+=("$arg") ;;
-  esac
-done
-set -- ${ARGS[@]+"${ARGS[@]}"}
+main() {
+  local -a args=()
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      -y|--yes)  ASSUME_YES=true ;;
+      -h|--help) sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; return 0 ;;
+      *)         args+=("$arg") ;;
+    esac
+  done
+  set -- ${args[@]+"${args[@]}"}
+  refresh_user_path
 
-case "${1:-}" in
-  install)     do_install ;;
-  add-repo)    do_add_repo "${2:-$PWD}" ;;
-  remove-repo) do_remove_repo "${2:-$PWD}" ;;
-  check)       do_check ;;
-  demo)        do_demo "${2:-}" ;;
-  uninstall)   do_uninstall ;;
-  "")
-    prepare_python_environment
-    do_install
-    if ask_yes "Try it now on a throwaway project?"; then
-      do_demo
-    else
-      prompt_for_repo
-    fi
-    ;;
-  *) die "unknown command: $1  (run ./setup.sh --help)" ;;
-esac
+  case "${1:-}" in
+    install)     do_install ;;
+    add-repo)    do_add_repo "${2:-$PWD}" ;;
+    remove-repo) do_remove_repo "${2:-$PWD}" ;;
+    check)       do_check ;;
+    demo)        do_demo "${2:-}" ;;
+    uninstall)   do_uninstall ;;
+    "")
+      prepare_python_environment
+      prepare_provider_clis
+      offer_provider_logins
+      do_install
+      if [ "$AUTH_PENDING" = true ]; then
+        warn "Installation finished, but sign-in is still required before Agent Duet can run."
+      fi
+      if ask_yes "Try it now on a throwaway project?"; then
+        do_demo
+      else
+        prompt_for_repo
+      fi
+      ;;
+    *) die "unknown command: $1  (run ./setup.sh --help)" ;;
+  esac
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

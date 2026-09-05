@@ -50,14 +50,16 @@ run that provider until the user signs in.
 ## Guided Flow
 
 1. Detect Linux, Git, Python 3.13+, and a supported download command.
-2. Honor a compatible `DUET_PYTHON` when explicitly supplied. Otherwise, detect Conda through
-   `CONDA_EXE`, an executable returned by `command -v conda`, or `$HOME/miniconda3/bin/conda`.
+2. Detect Conda through `CONDA_EXE`, an executable returned by `command -v conda`, or
+   `$HOME/miniconda3/bin/conda`. A detected Conda installation always takes precedence over
+   `DUET_PYTHON`, so setup cannot install into an unrelated or base environment by accident.
 3. When Conda exists, show the exact command and ask before creating a dedicated environment named
    `agent-duet` with Python 3.13 and pip. Reuse that environment when it is already compatible;
    repair only that named environment when necessary. Never modify `base` or another environment.
-4. When Conda does not exist, require a compatible default `python3`, show the private environment
-   path, and ask before creating an Agent Duet virtual environment under the user's data directory.
-   Never pass pip operations to the system interpreter itself.
+4. When Conda does not exist, honor an explicitly supplied compatible `DUET_PYTHON`; otherwise
+   require a compatible default `python3`, show the private environment path, and ask before
+   creating an Agent Duet virtual environment under the user's data directory. Never pass pip
+   operations to the system interpreter itself.
 5. If Claude Code is absent, show Anthropic's official installer URL and ask before running it.
 6. If Codex is absent, show OpenAI's official installer URL and ask before running it.
 7. Check authentication with `claude auth status` and `codex login status`. If either CLI is not

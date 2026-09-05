@@ -55,23 +55,27 @@ work keeps going even if you close your terminal.
 ## Install
 
 ```bash
-git clone <your private repo url>
+git clone https://github.com/slyfox1186/Claude_Code_Codex_MCP_Coordinator.git
 cd Claude_Code_Codex_MCP_Coordinator
 ./setup.sh
 ```
 
-That is the whole installation. It installs the package, writes your config with real
-paths filled in, locks the config and state directories to your account, registers the
-server with both Claude Code and Codex, installs the `/duet` command into both, and offers
-to build a throwaway project so your first run is not against something you care about.
+That is the whole installation. Setup explains what it needs and asks for consent before
+creating an environment or installing a missing provider CLI.
 
-It parses every file back before writing it, backs up anything it replaces to
-`<name>.duet-backup`, never uses `sudo`, and is safe to re-run.
+- If Conda is detected, it creates a dedicated environment named `agent-duet`. Setup never installs Conda or changes `base` or another environment.
+- Without Conda, it uses the default Python 3.13+ only to create a private environment;
+  packages are not installed into system Python.
+- If Claude Code or Codex is missing, it offers the official installer. It also offers
+  sign-in and a throwaway demo.
+- Answer `n` to the demo and setup asks for your real repository's relative or full path.
 
-**Requirements:** Linux, Python 3.13+, `git`, Claude Code CLI (tested against 2.1.236),
-Codex CLI (tested against 0.153.2). Dependencies are pinned in `pyproject.toml` and
-`requirements-lock.txt`. There is no virtualenv — the package installs into the Python
-interpreter you name.
+Requirements: Linux, Git, and Python 3.13+. `curl` or `wget` is needed only if a provider
+CLI must be downloaded. See **[INSTALL.md](INSTALL.md)** for the short guide and read
+**[SECURITY.md](SECURITY.md)** before use.
+
+Setup never uses `sudo`. It validates generated configuration, backs up files it replaces
+to `<name>.duet-backup`, and is safe to rerun.
 
 ---
 
@@ -282,6 +286,7 @@ not hand the same access to a person.
 
 ## More
 
+- **[INSTALL.md](INSTALL.md)** — the short server installation guide
 - **[HOW_TO_TEST.md](HOW_TO_TEST.md)** — try it in three commands
 - **[SECURITY.md](SECURITY.md)** — the trust model and every guard, in detail
 - **[HOW_TO_BUILD_THIS.md](HOW_TO_BUILD_THIS.md)** — installing it on another machine,
