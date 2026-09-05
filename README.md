@@ -3,7 +3,7 @@
 **Have Claude write the code, have Codex review it, then have Claude answer the review —
 automatically, in one command, with nothing committed until you say so.**
 
-You type `/duet <what you want built>`. Three separate AI sessions run one after another,
+You type `/duet <what you want done>`. Three separate AI sessions run one after another,
 your tests run, and then it stops and shows you what happened. You decide whether it ships.
 
 ---
