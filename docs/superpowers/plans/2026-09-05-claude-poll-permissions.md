@@ -256,19 +256,20 @@ setup for idempotency, and uninstall. Inspect the actual settings JSON after eac
 Expected: install adds exactly two rules, check succeeds, rerun does not duplicate them,
 and uninstall removes only them.
 
-- [ ] **Step 3: Repair and verify this machine**
-
-Run `./setup.sh install` from the verified checkout, then `./setup.sh check`. Inspect only
-`permissions.allow` from `~/.claude/settings.json`; require both exact entries and reject
-`mcp__agent_duet__*`. Call `duet_status` for the retained SaidProof run and report only its
-returned phase/liveness evidence.
-
-- [ ] **Step 4: Audit and integrate**
+- [ ] **Step 3: Audit and integrate**
 
 Re-read the design and request, inspect every diff and affected lifecycle branch, then use
 the finishing-a-development-branch workflow to integrate the feature branch into local
 `main`. Fetch `origin`, rebase safely without force, and rerun any checks invalidated by
 integration.
+
+- [ ] **Step 4: Repair and verify this machine from permanent `main`**
+
+Run `./setup.sh install` from the permanent `main` checkout, never from the temporary
+worktree, then run `./setup.sh check`. Inspect only `permissions.allow` from
+`~/.claude/settings.json`; require both exact entries and reject `mcp__agent_duet__*`.
+Call `duet_status` for the retained SaidProof run and report only its returned
+phase/liveness evidence.
 
 - [ ] **Step 5: Push and verify GitHub state**
 
