@@ -330,6 +330,22 @@ def test_declining_demo_prompts_for_and_registers_repository(
     project = (home if entered_path == "home" else tmp_path) / "projects" / "sample"
     project.mkdir(parents=True)
     subprocess.run(["git", "init", "-q", str(project)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(project),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "initial",
+        ],
+        check=True,
+    )
     answer = {
         "absolute": str(project),
         "relative": str(project.relative_to(tmp_path)),
@@ -342,6 +358,102 @@ def test_declining_demo_prompts_for_and_registers_repository(
     assert "Project repository path" in result.stdout
     assert f"Registering {project}" in result.stdout
     assert f'path = "{project}"' in (home / ".config/agent-duet/config.toml").read_text()
+
+
+def test_guided_setup_initializes_plain_directory_with_explicit_consent(
+    tmp_path: Path,
+) -> None:
+    home, env = _fake_install_environment(tmp_path)
+    project = tmp_path / "plain-folder"
+    project.mkdir()
+    (project / ".gitignore").write_text(".env\n")
+    (project / ".env").write_text("LOCAL_ONLY=ignored\n")
+    (project / "app.py").write_text("print('hello')\n")
+
+    result = _run_interactive_setup(
+        cwd=tmp_path,
+        env=env,
+        answers=f"n\n{project}/ \ny\n",
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert "needs a local Git baseline" in result.stdout
+    assert "Nothing will be uploaded" in result.stdout
+    assert "local baseline commit created" in result.stdout
+    assert (project / ".git").is_dir()
+    tracked = subprocess.run(
+        ["git", "-C", str(project), "ls-files"],
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+    ).stdout.splitlines()
+    assert tracked == [".gitignore", "app.py"]
+    assert f"Registering {project}" in result.stdout
+    assert f'path = "{project}"' in (home / ".config/agent-duet/config.toml").read_text()
+
+
+@pytest.mark.parametrize("option", ["-d", "--directory", "--directory="])
+def test_directory_option_registers_without_project_or_demo_prompt(
+    tmp_path: Path, option: str
+) -> None:
+    home, env = _fake_install_environment(tmp_path)
+    project = tmp_path / "projects" / "sample"
+    project.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(project)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(project),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "initial",
+        ],
+        check=True,
+    )
+
+    directory_args = (
+        (f"--directory={project}/",) if option.endswith("=") else (option, f"{project}/")
+    )
+    result = _run_interactive_setup(
+        cwd=tmp_path,
+        env=env,
+        answers="",
+        args=directory_args,
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert "Try it now on a throwaway project?" not in result.stdout
+    assert "Project repository path" not in result.stdout
+    assert f"Registering {project}" in result.stdout
+    assert f'path = "{project}"' in (home / ".config/agent-duet/config.toml").read_text()
+
+
+def test_declining_git_initialization_leaves_plain_directory_unchanged(
+    tmp_path: Path,
+) -> None:
+    _, env = _fake_install_environment(tmp_path)
+    project = tmp_path / "plain-folder"
+    project.mkdir()
+    source = project / "app.py"
+    source.write_text("print('hello')\n")
+
+    result = _run_interactive_setup(
+        cwd=tmp_path,
+        env=env,
+        answers="n\n",
+        args=("-d", str(project)),
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert "Project was not registered" in result.stdout
+    assert not (project / ".git").exists()
+    assert source.read_text() == "print('hello')\n"
 
 
 def test_blank_repository_path_skips_registration(tmp_path: Path) -> None:
@@ -955,5 +1067,8 @@ def test_documentation_leads_with_short_guided_install_and_consent_disclosure() 
         assert "Conda" in document
         assert "never installs Conda" in document
         assert "SECURITY.md" in document
+        assert "-d" in document
+        assert "--directory" in document
+        assert "does not need to be a Git repository" in document or "ordinary folder" in document
 
     assert readme.index("## Install") < readme.index("## Installing by hand")

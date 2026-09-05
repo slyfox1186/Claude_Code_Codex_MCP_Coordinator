@@ -79,6 +79,28 @@ def test_finalize_request_requires_message():
         )
 
 
+def test_finalize_request_allows_no_remote_for_local_commit():
+    request = FinalizeRequest(
+        run_id="00000000-0000-4000-8000-000000000000",
+        expected_branch="main",
+        expected_remote_url="",
+        commit_message="m",
+        push=False,
+    )
+    assert request.push is False
+
+
+def test_finalize_request_requires_remote_url_when_pushing():
+    with pytest.raises(ValidationError, match="expected_remote_url"):
+        FinalizeRequest(
+            run_id="00000000-0000-4000-8000-000000000000",
+            expected_branch="main",
+            expected_remote_url="",
+            commit_message="m",
+            push=True,
+        )
+
+
 @pytest.mark.parametrize(
     "name",
     ["main", "agent-duet/abc123", "feature/x.y", "release-1.2.3"],

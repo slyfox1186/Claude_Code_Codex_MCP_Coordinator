@@ -171,6 +171,21 @@ def test_finalize_without_push_commits_locally_only(
     assert remote_sha(bare_remote, record.branch, repo) == before, "nothing was pushed"
 
 
+def test_finalize_without_push_needs_no_remote(
+    runtime, config, store, repo, fake_log_dir
+):
+    git("remote", "remove", "origin", cwd=repo)
+    record = ready_run(config, store, repo)
+
+    result = finalize(record, "", push=False)
+
+    assert result.phase is Phase.COMPLETE
+    assert result.pushed is False
+    assert result.remote_name is None
+    assert result.remote_url is None
+    assert len(result.local_commit_sha) == 40
+
+
 def test_deployment_is_reported_not_checked_without_a_verifier(
     runtime, config, store, repo, bare_remote, fake_log_dir
 ):

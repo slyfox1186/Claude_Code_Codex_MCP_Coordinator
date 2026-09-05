@@ -44,7 +44,7 @@ one is enforced by code:
       │ 4. your tests run         │
       └─────────────┬─────────────┘
                     ▼
-              it STOPS and reports  ──▶  you approve  ──▶  commit + push
+              it STOPS and reports  ──▶  you approve  ──▶  commit (+ optional push)
 ```
 
 Expect **5 to 20 minutes**. Three real AI sessions run end to end. That is normal, and the
@@ -57,11 +57,12 @@ work keeps going even if you close your terminal.
 ```bash
 git clone https://github.com/slyfox1186/Claude_Code_Codex_MCP_Coordinator.git
 cd Claude_Code_Codex_MCP_Coordinator
-./setup.sh
+./setup.sh -d /path/to/your/project
 ```
 
-That is the whole installation. Setup explains what it needs and asks for consent before
-creating an environment or installing a missing provider CLI.
+Use `--directory` instead of `-d` if you prefer the long form. You can also omit the
+option and enter the project path when prompted. Setup explains what it needs and asks
+for consent before creating an environment or installing a missing provider CLI.
 
 - If Conda is detected, it creates a dedicated environment named `agent-duet`.
   Setup never installs Conda or changes `base` or another environment.
@@ -71,7 +72,12 @@ creating an environment or installing a missing provider CLI.
   sign-in and a throwaway demo. Before consent, setup shows the expected user-local files;
   the vendor installers manage their own updates, and Codex may add a `PATH` block to your
   shell profile.
-- Answer `n` to the demo and setup asks for your real repository's relative or full path.
+- `-d`/`--directory` skips the demo and project-path questions. The value may be relative,
+  absolute, `~/...`, and may end in `/`.
+- The selected project may be an ordinary folder. With explicit consent, setup creates
+  the local Git baseline needed for safe model-to-model diffs. It records every existing
+  non-ignored file in one local commit, adds no remote, and uploads nothing. Review the
+  project's `.gitignore` first if it may contain sensitive files.
 
 Requirements: Linux and Git, plus Python 3.13+ when Conda is absent. `curl` or `wget` is
 needed only if a provider CLI must be downloaded. See **[INSTALL.md](INSTALL.md)** and read
@@ -84,9 +90,11 @@ to `<name>.duet-backup`, and is safe to rerun.
 
 ## Use it
 
-Point it at a project once:
+Point it at a project during installation or later:
 
 ```bash
+./setup.sh -d ~/code/my-project
+./setup.sh --directory ~/code/my-project
 ./setup.sh add-repo ~/code/my-project
 ```
 
@@ -100,13 +108,16 @@ Type `/duet` with nothing after it and it will work out the task from your conve
 or ask you if there is nothing to work from. Either way it confirms the acceptance
 criteria before spending your time.
 
-When it finishes it prints what it did and waits. Say **"finalize"** and it commits and
-pushes. Say nothing and nothing happens.
+When it finishes it prints what it did and waits. Say **"finalize"** and it commits the
+validated change. If the project has a remote, it can push after approval; without one,
+it completes with a local commit. Say nothing and nothing happens.
 
 ### Other setup commands
 
 ```bash
 ./setup.sh check                          # is everything working?
+./setup.sh -d ~/code/project              # guided setup + this project
+./setup.sh --directory ~/code/project     # identical long form
 ./setup.sh add-repo ~/code/project        # let it work on a project
 ./setup.sh remove-repo ~/code/project
 ./setup.sh demo                           # a throwaway project to try it on
@@ -114,9 +125,10 @@ pushes. Say nothing and nothing happens.
 ./setup.sh uninstall
 ```
 
-`add-repo` allows the project's parent directory, detects its test suite (pytest,
-`npm test`, `cargo test`, `go test`), and writes the config entry between markers so
-`remove-repo` takes it back out cleanly.
+Project registration allows the project's parent directory, detects its test suite
+(pytest, `npm test`, `cargo test`, `go test`), and writes the config entry between
+markers so `remove-repo` takes it back out cleanly. A folder without Git history gets a
+consent prompt for the same local-only baseline initialization used by `-d`.
 
 ---
 

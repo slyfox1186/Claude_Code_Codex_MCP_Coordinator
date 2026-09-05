@@ -2,7 +2,7 @@
 #
 # agent-duet setup. One script, no hand-edited config files.
 #
-#   ./setup.sh                    guided setup, asks a few plain questions
+#   ./setup.sh [-d PATH]          guided setup; optionally register PATH directly
 #   ./setup.sh install            install and register everything, no questions
 #   ./setup.sh add-repo [PATH]    let agent-duet work on a project (default: here)
 #   ./setup.sh remove-repo [PATH] undo that
@@ -31,6 +31,7 @@ DEMO_REMOTE="$DEMO_ROOT/smoke-remote.git"
 ASSUME_YES=false
 AUTH_PENDING=false
 INSTALL_TEMP_DIR=""
+PROJECT_DIR=""
 
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
   B=$'\033[1m'; G=$'\033[32m'; Y=$'\033[33m'; R=$'\033[31m'; D=$'\033[2m'; N=$'\033[0m'
@@ -79,17 +80,26 @@ cleanup_install_temp() {
 
 prompt_for_repo() {
   local target
-  read -r -p "    Project repository path (relative, absolute, or ~/...; blank to skip): " \
-    target || true
-  if [ -z "$target" ]; then
-    info "No project registered. Later: ./setup.sh add-repo /path/to/your/project"
-    return 0
-  fi
-  case "$target" in
-    "~") target="$HOME" ;;
-    "~/"*) target="$HOME/${target#\~/}" ;;
-  esac
-  do_add_repo "$target"
+  while true; do
+    read -r -p "    Project repository path (relative, absolute, or ~/...; blank to skip): " \
+      target || true
+    if [ -z "$target" ]; then
+      info "No project registered. Later: ./setup.sh add-repo /path/to/your/project"
+      return 0
+    fi
+    case "$target" in
+      "~") target="$HOME" ;;
+      "~/"*) target="$HOME/${target#\~/}" ;;
+    esac
+    if [ ! -d "$target" ]; then
+      warn "$target does not exist."
+      info "Enter an existing project folder, or leave it blank to skip."
+      continue
+    fi
+    if do_add_repo "$target"; then
+      return 0
+    fi
+  done
 }
 
 # ---------------------------------------------------------------- python ----
@@ -544,8 +554,12 @@ PY
 
 print_setup_complete() {
   printf '\n%sSetup is done.%s\n' "$G$B" "$N"
-  info "Next:  ./setup.sh add-repo /path/to/your/project"
-  info "   or: ./setup.sh demo        (try it on a throwaway project first)"
+  if [ -n "$PROJECT_DIR" ]; then
+    info "Next: registering the project supplied with --directory"
+  else
+    info "Next:  ./setup.sh add-repo /path/to/your/project"
+    info "   or: ./setup.sh demo        (try it on a throwaway project first)"
+  fi
 }
 
 install_command_file() {
@@ -562,13 +576,55 @@ install_command_file() {
 
 # -------------------------------------------------------------- add-repo ----
 
+ensure_git_baseline() {
+  local target="$1" created_git=false
+  if git -C "$target" rev-parse --verify HEAD >/dev/null 2>&1; then
+    return 0
+  fi
+
+  warn "$target needs a local Git baseline so Claude and Codex can compare their work."
+  info "With your consent, setup will initialize Git and make one local baseline commit."
+  info "Every existing file not excluded by .gitignore will enter local Git history,"
+  info "including sensitive files. Review .gitignore first if that may be a concern."
+  info "Nothing will be uploaded, and no remote will be added."
+  if ! ask_consent "Create the local Git baseline now?"; then
+    info "Project was not registered. The folder was left unchanged."
+    return 2
+  fi
+
+  if ! git -C "$target" rev-parse --git-dir >/dev/null 2>&1; then
+    git -C "$target" init -q --initial-branch=main \
+      || die "could not initialize a local Git repository in $target"
+    created_git=true
+  fi
+  if ! git -C "$target" add --all; then
+    [ "$created_git" = false ] || rm -rf -- "$target/.git"
+    die "could not stage the initial project snapshot; the new Git metadata was removed"
+  fi
+  if ! git -C "$target" \
+      -c user.name="Agent Duet Setup" \
+      -c user.email="agent-duet@localhost" \
+      -c commit.gpgSign=false \
+      commit --no-verify --allow-empty -qm "Initialize project for Agent Duet"; then
+    if [ "$created_git" = true ]; then
+      rm -rf -- "$target/.git"
+      die "could not create the baseline commit; the new Git metadata was removed"
+    fi
+    die "could not create the baseline commit in the existing Git repository"
+  fi
+  ok "local baseline commit created on $(git -C "$target" branch --show-current)"
+}
+
 do_add_repo() {
   local target="${1:-$PWD}"
+  case "$target" in
+    "~") target="$HOME" ;;
+    "~/"*) target="$HOME/${target#\~/}" ;;
+  esac
   [ -d "$target" ] || die "no such directory: $target"
   target="$(cd "$target" && pwd -P)"
-  git -C "$target" rev-parse --git-dir >/dev/null 2>&1 \
-    || die "$target is not a git repository. agent-duet only works on git repositories."
   [ -f "$CONFIG_FILE" ] || die "run ./setup.sh first — there is no config yet."
+  ensure_git_baseline "$target" || return $?
   PY="$(pick_python)"
 
   step "Registering $target"
@@ -933,23 +989,51 @@ do_uninstall() {
 main() {
   local -a args=()
   local arg
-  for arg in "$@"; do
+  while [ "$#" -gt 0 ]; do
+    arg="$1"
     case "$arg" in
-      -y|--yes)  ASSUME_YES=true ;;
+      -y|--yes)
+        ASSUME_YES=true
+        shift
+        ;;
+      -d|--directory)
+        [ "$#" -ge 2 ] || die "$arg requires a project directory"
+        [ -z "$PROJECT_DIR" ] || die "project directory was supplied more than once"
+        PROJECT_DIR="$2"
+        shift 2
+        ;;
+      --directory=*)
+        [ -z "$PROJECT_DIR" ] || die "project directory was supplied more than once"
+        PROJECT_DIR="${arg#*=}"
+        [ -n "$PROJECT_DIR" ] || die "--directory requires a project directory"
+        shift
+        ;;
       -h|--help)
         awk 'NR < 3 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' \
           "${BASH_SOURCE[0]}"
         return 0
         ;;
-      *)         args+=("$arg") ;;
+      *)
+        args+=("$arg")
+        shift
+        ;;
     esac
   done
   set -- ${args[@]+"${args[@]}"}
   refresh_user_path
 
   case "${1:-}" in
-    install)     do_install; do_check; print_setup_complete ;;
-    add-repo)    do_add_repo "${2:-$PWD}" ;;
+    install)
+      do_install
+      do_check
+      print_setup_complete
+      [ -z "$PROJECT_DIR" ] || do_add_repo "$PROJECT_DIR"
+      ;;
+    add-repo)
+      [ -z "$PROJECT_DIR" ] \
+        || die "use either add-repo PATH or --directory PATH, not both"
+      do_add_repo "${2:-$PWD}"
+      ;;
     remove-repo) do_remove_repo "${2:-$PWD}" ;;
     check)       do_check ;;
     demo)        do_demo "${2:-}" ;;
@@ -965,7 +1049,9 @@ main() {
       if [ "$AUTH_PENDING" = true ]; then
         warn "Installation finished, but sign-in is still required before Agent Duet can run."
       fi
-      if ask_yes "Try it now on a throwaway project?"; then
+      if [ -n "$PROJECT_DIR" ]; then
+        do_add_repo "$PROJECT_DIR" || true
+      elif ask_yes "Try it now on a throwaway project?"; then
         do_demo
       else
         prompt_for_repo

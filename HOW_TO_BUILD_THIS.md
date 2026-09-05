@@ -19,10 +19,12 @@ Codex CLI, it runs one workflow on request:
 3. a fresh Claude Code process adjudicates that critique, fixes what is justified, and
    revalidates;
 4. the run stops at `AWAITING_FINALIZE` and waits for a human;
-5. a separate tool call commits, pushes, and verifies the remote SHA.
+5. a separate tool call commits locally and, when requested, pushes and verifies the
+   remote SHA.
 
 `duet_start` cannot commit, push, or deploy. Only `duet_finalize` can, and only after
-re-verifying the branch, the remote URL, and the exact git tree that was validated.
+re-verifying the branch and exact Git tree that was validated. A push additionally
+requires the expected remote URL; a local-only finalization requires no remote.
 
 **Read `SECURITY.md` before installing.** The child agents run with full, unsandboxed
 machine access by deliberate design. That is the shipped default and it is intentional;
@@ -150,7 +152,8 @@ suite means the install is not usable, not that the tests are wrong.
 
 ```bash
 cd "$DUET_REPO"
-./setup.sh install
+./setup.sh -d /path/to/project
+# identical: ./setup.sh --directory /path/to/project
 ```
 
 That single command does all of the following, and refuses to write any file it cannot
@@ -185,20 +188,25 @@ files exist.
 Then start each CLI interactively and run `/mcp`. Both must show `agent_duet` with exactly
 five tools: `duet_start`, `duet_status`, `duet_wait`, `duet_cancel`, `duet_finalize`.
 
-### Allowing a repository
+### Allowing a project folder
 
-The coordinator will only work on a repository that is named in the config, and only if it
-sits **strictly below** an `allowed_repo_roots` entry.
+The coordinator will only work on a project named in the config and sitting **strictly
+below** an `allowed_repo_roots` entry.
 
 ```bash
+./setup.sh -d /path/to/project
+./setup.sh --directory /path/to/project
 ./setup.sh add-repo /path/to/project
 ```
 
-This allows the project's parent directory, detects its test suite (pytest, `npm test`,
-`cargo test`, or `go test`), and writes the `[[repositories]]` entry between markers so
-`./setup.sh remove-repo` can take it back out cleanly. It refuses a project sitting
-directly in `$HOME` and tells you to move it one level down, because the loader will not
-accept a home directory as a root.
+`-d` and `--directory` supply the project during installation and skip the later demo and
+path prompts. All three forms accept relative, absolute, `~/...`, and trailing-slash
+paths. The project need not already use Git. Setup explains that Agent Duet needs a local
+baseline, warns that every non-ignored file will enter local history, and asks for
+explicit consent before running `git init`, staging, and creating the baseline commit.
+It adds no remote and uploads nothing. Registration then detects the test suite (pytest,
+`npm test`, `cargo test`, or `go test`) and writes the `[[repositories]]` entry between
+markers so `./setup.sh remove-repo` can take it back out cleanly.
 
 Those `validation_commands` are the coordinator's own authoritative check, run after both
 agents finish. They are command **vectors**, never shell strings, and they are read only
@@ -304,6 +312,9 @@ Expected branch: <branch>. Expected remote: origin.
 Expected remote URL: <exact URL>. Commit message: <message>.
 Push it, verify the remote ref equals the exact commit, and report exact evidence.
 ```
+
+For a project without a remote, approve a local commit instead: pass `push=false`; no
+remote name or URL is required.
 
 **Checks**
 

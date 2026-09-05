@@ -94,9 +94,11 @@ as the tool going behind their back.
    Then ask whether to finalize. **Do not call `duet_finalize` until the user answers
    yes in a message.** Your own summary is not approval.
 
-6. **If the user approves**, call `duet_finalize` with the run's exact branch, the exact
-   remote URL from the repository, and a commit message. Then report the local commit
-   SHA, the remote SHA, and the deployment status verbatim. If deployment says
+6. **If the user approves**, call `duet_finalize` with the run's exact branch and a commit
+   message. If the repository has a remote, pass its exact URL and push normally. If it
+   has no remote, pass `push=false`; no remote URL is required, and finalization creates
+   a local commit only. Report the local commit SHA and whether anything was pushed. For
+   a push, also report the remote SHA and deployment status verbatim. If deployment says
    `NOT_CHECKED`, say `NOT_CHECKED` — never describe it as deployed or healthy.
 
 7. **If `duet_finalize` refuses**, it has committed nothing and the run is still at

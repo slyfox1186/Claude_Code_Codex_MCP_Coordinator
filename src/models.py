@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # ---------------------------------------------------------------------------
 # State machine
@@ -135,7 +135,7 @@ class FinalizeRequest(BaseModel):
     run_id: UUID
     expected_branch: str = Field(min_length=1, max_length=200)
     expected_remote_name: str = "origin"
-    expected_remote_url: str = Field(min_length=1, max_length=500)
+    expected_remote_url: str = Field(default="", max_length=500)
     commit_message: str = Field(min_length=1, max_length=500)
     push: bool = True
     deployment_profile: str | None = Field(default=None, max_length=200)
@@ -153,6 +153,12 @@ class FinalizeRequest(BaseModel):
         if not _REMOTE_NAME_RE.match(value):
             raise ValueError(f"unacceptable remote name: {value!r}")
         return value
+
+    @model_validator(mode="after")
+    def _remote_required_for_push(self) -> FinalizeRequest:
+        if self.push and not self.expected_remote_url.strip():
+            raise ValueError("expected_remote_url is required when push=true")
+        return self
 
 
 # ---------------------------------------------------------------------------

@@ -122,6 +122,13 @@ read from the operator's `config.toml`, keyed by canonical repository path, as T
 arrays. A command supplied in task text, or read from a file inside the repository under
 test, is never executed.
 
+**Plain project folders require consent before local history is created.** When a selected
+folder has no commit, setup explains that it will initialize Git and make a baseline
+commit containing every existing file not excluded by `.gitignore`. It warns about
+sensitive files first, uses an explicit setup identity for that one commit, skips project
+hooks and signing, adds no remote, and uploads nothing. Declining leaves the folder
+unchanged. Projects without a remote can be finalized as local commits with `push=false`.
+
 ## Secrets are filtered on the way out
 
 **Redaction is applied to everything that leaves.** Logs, evidence, error messages, and

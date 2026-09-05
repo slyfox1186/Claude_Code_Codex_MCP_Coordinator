@@ -5,8 +5,11 @@ On a Linux server, run:
 ```bash
 git clone https://github.com/slyfox1186/Claude_Code_Codex_MCP_Coordinator.git
 cd Claude_Code_Codex_MCP_Coordinator
-./setup.sh
+./setup.sh -d /path/to/your/project
 ```
+
+`./setup.sh --directory /path/to/your/project` is identical. Omit the option only if you
+want setup to ask for the project path later.
 
 Follow the prompts. Setup explains each change and asks for consent before it:
 
@@ -19,8 +22,12 @@ The first dependency install can take a few minutes. Setup keeps the download pr
 - If Claude Code or Codex is missing, setup offers their official installer and waits for `y`.
   Before asking, it shows the expected user-local files. These installers manage their own
   updates, and Codex may add its bin directory to your shell profile's `PATH`.
-- Setup offers sign-in, then asks whether to make a throwaway demo. Answer `n` to enter the
-  relative or full path to your real Git repository instead.
+- `-d` or `--directory` accepts a relative path, full path, `~/...`, or a trailing `/`
+  and skips the demo and project-path questions.
+- The project does not need to be a Git repository beforehand. Agent Duet needs a local
+  baseline to compare Claude's and Codex's work, so setup explains the change and asks
+  before initializing Git and committing the existing non-ignored files. Nothing is
+  uploaded and no remote is added. Review `.gitignore` first if sensitive files exist.
 
 Check the finished installation:
 

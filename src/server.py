@@ -625,19 +625,20 @@ def _surviving_processes(record: RunRecord) -> list[str]:
 async def duet_finalize(
     run_id: UUID,
     expected_branch: str,
-    expected_remote_url: str,
     commit_message: str,
+    expected_remote_url: str = "",
     expected_remote_name: str = "origin",
     push: bool = True,
     deployment_profile: str | None = None,
 ) -> FinalizeResult:
     """Publish a validated run: commit, optionally push, optionally verify deployment.
 
-    Side effects: creates a real commit, pushes it to the named remote, and runs the
-    configured deployment verifier. Only ever call this after the user has seen the
-    evidence from duet_status/duet_wait and explicitly approved. Refuses unless the run
-    is exactly AWAITING_FINALIZE and the branch, remote URL, and validated diff
-    fingerprint all still match.
+    Side effects: creates a real commit and, when ``push`` is true, pushes it to the
+    named remote and runs the configured deployment verifier. A local-only commit needs
+    no remote or remote URL. Only ever call this after the user has seen the evidence
+    from duet_status/duet_wait and explicitly approved. Refuses unless the run is exactly
+    AWAITING_FINALIZE and the branch and validated diff fingerprint still match; pushes
+    additionally require an exact remote URL match.
     """
     refuse_if_child("duet_finalize")
     logger.info(
@@ -689,7 +690,7 @@ def _finalize_blocking(
             f"branch mismatch: the run is on {record.branch!r}, the request expects "
             f"{request.expected_branch!r}"
         )
-    if request.expected_remote_name not in config.git.allowed_remote_names:
+    if request.push and request.expected_remote_name not in config.git.allowed_remote_names:
         raise _fail(
             f"remote {request.expected_remote_name!r} is not in allowed_remote_names "
             f"{config.git.allowed_remote_names}"
@@ -765,35 +766,39 @@ def _finalize_locked(
             "repository moved after validation. Re-run instead of publishing stale work."
         )
 
-    actual_remote = info.remotes.get(request.expected_remote_name)
-    if actual_remote is None:
-        raise _fail(
-            f"remote {request.expected_remote_name!r} does not exist in {worktree}; "
-            f"available remotes: {sorted(info.remotes)}"
-        )
-    if normalize_remote_url(actual_remote) != normalize_remote_url(request.expected_remote_url):
-        raise _fail(
-            f"remote URL mismatch for {request.expected_remote_name!r}: the repository "
-            f"has {normalize_remote_url(actual_remote)!r}, the request expects "
-            f"{normalize_remote_url(request.expected_remote_url)!r}"
-        )
-    # The caller's expectation alone is not enough: a write-capable phase could have
-    # rewritten the remote, and a finalize request that repeats the new value would
-    # otherwise bless it. The remote recorded at run creation is immutable evidence.
-    recorded_remotes = record.evidence.get("start_remotes")
-    if isinstance(recorded_remotes, dict):
-        recorded_url = recorded_remotes.get(request.expected_remote_name)
-        if recorded_url is None:
+    actual_remote: str | None = None
+    if request.push:
+        actual_remote = info.remotes.get(request.expected_remote_name)
+        if actual_remote is None:
             raise _fail(
-                f"remote {request.expected_remote_name!r} did not exist when this run "
-                "started; refusing to push to a remote the run never validated"
+                f"remote {request.expected_remote_name!r} does not exist in {worktree}; "
+                f"available remotes: {sorted(info.remotes)}"
             )
-        if normalize_remote_url(recorded_url) != normalize_remote_url(actual_remote):
+        if normalize_remote_url(actual_remote) != normalize_remote_url(
+            request.expected_remote_url
+        ):
             raise _fail(
-                f"remote {request.expected_remote_name!r} changed during the run: it was "
-                f"{normalize_remote_url(recorded_url)!r} at start and is now "
-                f"{normalize_remote_url(actual_remote)!r}. Refusing to publish."
+                f"remote URL mismatch for {request.expected_remote_name!r}: the repository "
+                f"has {normalize_remote_url(actual_remote)!r}, the request expects "
+                f"{normalize_remote_url(request.expected_remote_url)!r}"
             )
+        # The caller's expectation alone is not enough: a write-capable phase could have
+        # rewritten the remote, and a finalize request that repeats the new value would
+        # otherwise bless it. The remote recorded at run creation is immutable evidence.
+        recorded_remotes = record.evidence.get("start_remotes")
+        if isinstance(recorded_remotes, dict):
+            recorded_url = recorded_remotes.get(request.expected_remote_name)
+            if recorded_url is None:
+                raise _fail(
+                    f"remote {request.expected_remote_name!r} did not exist when this run "
+                    "started; refusing to push to a remote the run never validated"
+                )
+            if normalize_remote_url(recorded_url) != normalize_remote_url(actual_remote):
+                raise _fail(
+                    f"remote {request.expected_remote_name!r} changed during the run: it was "
+                    f"{normalize_remote_url(recorded_url)!r} at start and is now "
+                    f"{normalize_remote_url(actual_remote)!r}. Refusing to publish."
+                )
 
     current_diff = combined_diff_sha256(worktree, base, record.owned_paths)
     logger.info(
@@ -883,8 +888,8 @@ def _finalize_locked(
         staged_paths=staged,
         tree_sha=tree,
         validation_manifest=record.evidence.get("validation_manifest"),
-        remote_name=request.expected_remote_name,
-        remote_url=normalize_remote_url(actual_remote),
+        remote_name=request.expected_remote_name if request.push else None,
+        remote_url=normalize_remote_url(actual_remote) if actual_remote else None,
     )
 
     if not request.push:

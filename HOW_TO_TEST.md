@@ -8,16 +8,17 @@ No files to edit. About 15 minutes, most of it waiting.
 
 ```bash
 cd Claude_Code_Codex_MCP_Coordinator/     # the folder you cloned
-./setup.sh
+./setup.sh -d /path/to/your/project
 ```
 
-Approve any required isolated environment or missing CLI installation, then answer `y`
-when it offers to build a throwaway project. The script writes your config, registers
-agent-duet with both Claude Code and Codex, installs the `/duet` command, and creates a
-tiny practice project so your first run is not against something you care about.
+Use `--directory` instead of `-d` for the equivalent long form. Supplying either form
+skips the demo and project-path questions. The script writes your config, registers
+agent-duet with both Claude Code and Codex, installs the `/duet` command, and registers
+the selected project.
 
-If you answer `n` to the demo, setup asks for the relative or full path to your real Git
-repository. Press Enter without a path to skip it.
+Without `-d`/`--directory`, setup offers a throwaway demo and then asks for a relative or
+full project path. A plain folder is accepted: after explicit consent, setup initializes
+local Git history from non-ignored files without adding a remote or uploading anything.
 
 It finishes by printing two lines to copy.
 
@@ -68,6 +69,8 @@ Deletes the practice project and removes it from your config. Nothing left behin
 ## Using it on a real project
 
 ```bash
+./setup.sh -d ~/code/my-project
+./setup.sh --directory ~/code/my-project
 ./setup.sh add-repo ~/code/my-project
 ```
 
