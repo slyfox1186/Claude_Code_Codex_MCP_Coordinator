@@ -49,6 +49,21 @@ ask_yes() {  # ask_yes "question" -> 0 for yes
   case "${reply:-y}" in [Nn]*) return 1 ;; *) return 0 ;; esac
 }
 
+prompt_for_repo() {
+  local target
+  read -r -p "    Project repository path (relative, absolute, or ~/...; blank to skip): " \
+    target || true
+  if [ -z "$target" ]; then
+    info "No project registered. Later: ./setup.sh add-repo /path/to/your/project"
+    return 0
+  fi
+  case "$target" in
+    "~") target="$HOME" ;;
+    "~/"*) target="$HOME/${target#\~/}" ;;
+  esac
+  do_add_repo "$target"
+}
+
 # ---------------------------------------------------------------- python ----
 # Everything that touches a .toml file goes through Python, so a config is only
 # ever written after it has been parsed back and checked.
@@ -605,7 +620,11 @@ case "${1:-}" in
   uninstall)   do_uninstall ;;
   "")
     do_install
-    if ask_yes "Try it now on a throwaway project?"; then do_demo; fi
+    if ask_yes "Try it now on a throwaway project?"; then
+      do_demo
+    else
+      prompt_for_repo
+    fi
     ;;
   *) die "unknown command: $1  (run ./setup.sh --help)" ;;
 esac
