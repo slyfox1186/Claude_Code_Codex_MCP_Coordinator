@@ -67,7 +67,10 @@ provider until the user signs in.
    points to it.
 9. Generate the private Agent Duet config and state directories, register the stdio MCP server
    with both clients, install both `/duet` command files, and run the existing health check.
-10. Offer the existing disposable demo.
+10. Offer the existing disposable demo. If the user declines, immediately ask for the real
+    project's Git repository path. Accept an absolute path, a path relative to the directory from
+    which setup was launched, or a leading `~/` path without using `eval`. Blank input explicitly
+    skips repository registration and prints the later `add-repo` command.
 
 Every download goes to a `mktemp -d` directory, uses HTTPS, executes only after consent, and is
 removed on exit. The installer prints the source URL and install target before asking. It never
@@ -127,6 +130,9 @@ The tests must prove:
 - headless Codex authentication selects device-code login;
 - locked dependencies are installed before the editable package;
 - temporary downloads are removed on success and failure;
+- declining the demo prompts for a real repository and registers relative, absolute, and `~/`
+  paths correctly;
+- blank repository input skips registration without registering the Agent Duet source repository;
 - the short README and `INSTALL.md` describe consent and the three-command path.
 
 After focused tests, run the full pytest suite, Ruff, mypy, `bash -n setup.sh`, and isolated smoke
