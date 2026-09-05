@@ -488,6 +488,35 @@ def test_status_proves_the_expected_model_process_is_alive(config, store, repo):
     assert "verified alive" in status.liveness.detail
 
 
+def test_status_proves_the_validation_repair_process_is_alive(config, store, repo):
+    record = start(config, store, repo)
+    for phase in (
+        Phase.CLAUDE_IMPLEMENTING,
+        Phase.HANDOFF_VALIDATING,
+        Phase.CODEX_REVIEWING,
+        Phase.REVIEW_INTEGRITY_CHECK,
+        Phase.CLAUDE_RECONCILING,
+        Phase.FINAL_VALIDATING,
+        Phase.CLAUDE_VALIDATION_REPAIRING,
+    ):
+        store.transition(record.run_id, phase, reason="driven by the test")
+    store.update(record.run_id, worker_pid=os.getpid(), worker_start_ticks=None)
+    store.set_active_child(
+        record.run_id,
+        pid=os.getpid(),
+        pgid=os.getpgrp(),
+        ticks=None,
+        label="validation-repair-claude",
+    )
+
+    status = _status_with_liveness(store.get(record.run_id))
+
+    assert status.phase is Phase.CLAUDE_VALIDATION_REPAIRING
+    assert status.liveness.state == "MODEL_ACTIVE"
+    assert status.liveness.child_label == "validation-repair-claude"
+    assert status.liveness.child_alive is True
+
+
 def test_queued_status_calls_a_live_worker_starting_not_validating(config, store, repo):
     record = start(config, store, repo)
     store.update(record.run_id, worker_pid=os.getpid(), worker_start_ticks=None)

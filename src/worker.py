@@ -75,7 +75,12 @@ class Cancelled(RuntimeError):
     """The run was cancelled cooperatively between or during phases."""
 
 
-TEMPLATE_NAMES = ("claude_implement.md", "codex_review.md", "claude_reconcile.md")
+TEMPLATE_NAMES = (
+    "claude_implement.md",
+    "codex_review.md",
+    "claude_reconcile.md",
+    "claude_validation_repair.md",
+)
 
 
 def _load_template(name: str) -> str:
@@ -109,6 +114,31 @@ def _format_criteria(criteria: list[str]) -> str:
     if not criteria:
         return "(none supplied; use your judgement and state your assumptions)"
     return "\n".join(f"- {item}" for item in criteria)
+
+
+def _format_validation_commands(commands: list[list[str]]) -> str:
+    """Render trusted argv vectors as unambiguous prompt literals."""
+    if not commands:
+        return "(none configured; report that independent validation is unavailable)"
+    return "\n".join(f"- `{json.dumps(command)}`" for command in commands)
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationFailure:
+    """One independently measured gate failure that Claude may repair once."""
+
+    attempt: int
+    command_index: int
+    result: ValidationResult
+    manifest: Path
+
+    @property
+    def message(self) -> str:
+        command = " ".join(self.result.argv)
+        return (
+            f"validation command {self.command_index} ({command}) failed with exit code "
+            f"{self.result.exit_code}. Manifest: {self.manifest}"
+        )
 
 
 @dataclass(slots=True)
@@ -179,6 +209,12 @@ class Worker:
         except Exception:  # a transient DB error must not kill the run
             logger.warning("could not read the cancel flag for run %s", self.run_id)
             return False
+
+    def _validation_commands(self, repo_path: str) -> list[list[str]]:
+        repo_config = self.config.repository_for(Path(repo_path))
+        if repo_config is None:
+            return []
+        return [list(command) for command in repo_config.validation_commands]
 
     def _enforce_branch_state(
         self,
@@ -262,12 +298,25 @@ class Worker:
         proposed_message = await self._phase_reconcile(worktree, integrity_note, branch_heads)
         self._check_cancel()
 
-        self._phase_final_validation(
-            worktree,
-            handoff_digest=handoff_digest,
-            critique_digest=critique_digest,
-            proposed_message=proposed_message,
-        )
+        for validation_attempt in (1, 2):
+            failure = self._phase_final_validation(
+                worktree,
+                handoff_digest=handoff_digest,
+                critique_digest=critique_digest,
+                proposed_message=proposed_message,
+                attempt=validation_attempt,
+            )
+            if failure is None:
+                return
+            if validation_attempt == 2:
+                raise PhaseFailure(failure.message)
+            repaired_message = await self._phase_validation_repair(
+                worktree,
+                failure=failure,
+                branch_heads=branch_heads,
+            )
+            if repaired_message:
+                proposed_message = repaired_message
 
     # -- worktree ----------------------------------------------------------
 
@@ -365,6 +414,9 @@ class Worker:
             starting_status="clean" if info.clean else "not clean",
             task=record.task,
             acceptance_criteria=_format_criteria(record.acceptance_criteria),
+            validation_commands=_format_validation_commands(
+                self._validation_commands(record.repo_path)
+            ),
             handoff_filename=HANDOFF_FILENAME,
             critique_filename=CRITIQUE_FILENAME,
         )
@@ -658,6 +710,9 @@ class Worker:
             review_integrity_note=integrity_note,
             task=record.task,
             acceptance_criteria=_format_criteria(record.acceptance_criteria),
+            validation_commands=_format_validation_commands(
+                self._validation_commands(record.repo_path)
+            ),
             handoff_filename=HANDOFF_FILENAME,
             critique_filename=CRITIQUE_FILENAME,
         )
@@ -700,6 +755,82 @@ class Worker:
         atomic_write_text(run_dir / "phase3.final_message.md", redact(message))
         return _extract_commit_message(message)
 
+    # -- validation repair -------------------------------------------------
+
+    async def _phase_validation_repair(
+        self,
+        worktree: Path,
+        *,
+        failure: ValidationFailure,
+        branch_heads: dict[str, str],
+    ) -> str:
+        record = self.store.transition(
+            self.run_id,
+            Phase.CLAUDE_VALIDATION_REPAIRING,
+            reason=f"repairing failed validation attempt {failure.attempt}",
+            summary=(
+                "The first authoritative validation failed. Claude is repairing the "
+                "measured failure before one complete revalidation."
+            ),
+        )
+        info = inspect_repo(worktree)
+        phase_timeout = self._phase_timeout_seconds(self.config.claude.timeout_seconds)
+        prompt = self._template("claude_validation_repair.md").format(
+            worktree=worktree,
+            timeout_description=self._phase_timeout_description(
+                self.config.claude.timeout_seconds
+            ),
+            repo_path=record.repo_path,
+            branch=record.branch or info.branch or "(detached)",
+            base_sha=record.base_sha or "",
+            current_sha=info.head_sha,
+            task=record.task,
+            acceptance_criteria=_format_criteria(record.acceptance_criteria),
+            validation_commands=_format_validation_commands(
+                self._validation_commands(record.repo_path)
+            ),
+            failed_command_index=failure.command_index,
+            failed_exit_code=failure.result.exit_code,
+            failed_validation=json.dumps(failure.result.model_dump(), indent=2),
+        )
+        run_dir = self._run_dir()
+        atomic_write_text(run_dir / "validation-repair.prompt.md", prompt)
+        argv = build_claude_argv(self.config.claude, self.config.claude_path, run_dir)
+        on_spawn, on_exit = self._track_child("validation-repair-claude")
+        result = await run_child(
+            argv,
+            prompt=prompt,
+            cwd=worktree,
+            log_dir=run_dir,
+            log_prefix="validation-repair-claude",
+            timeout_seconds=phase_timeout,
+            max_log_bytes=self.config.log_max_bytes_per_stream,
+            env_mode=self.config.child_env_mode,
+            cancel_check=self._cancel_requested,
+            on_spawn=on_spawn,
+            on_exit=on_exit,
+        )
+        self._enforce_branch_state(
+            worktree,
+            expected_heads=branch_heads,
+            phase="validation repair",
+        )
+        if result.cancelled:
+            raise Cancelled("cancelled during validation repair")
+        if result.timed_out:
+            raise PhaseFailure(
+                f"the validation repair phase exceeded its {phase_timeout}s timeout"
+            )
+        if not result.ok:
+            raise PhaseFailure(
+                f"claude exited {result.exit_code} during validation repair. "
+                f"stderr tail: {tail_text(result.stderr_log, 800)}"
+            )
+        payload, message = parse_claude_output(result.stdout_text)
+        write_json(run_dir / "validation-repair.claude.json", payload)
+        atomic_write_text(run_dir / "validation-repair.final_message.md", redact(message))
+        return _extract_commit_message(message)
+
     # -- final validation --------------------------------------------------
 
     def _phase_final_validation(
@@ -709,7 +840,8 @@ class Worker:
         handoff_digest: str,
         critique_digest: str,
         proposed_message: str,
-    ) -> None:
+        attempt: int,
+    ) -> ValidationFailure | None:
         record = self.store.transition(
             self.run_id,
             Phase.FINAL_VALIDATING,
@@ -724,6 +856,11 @@ class Worker:
             worktree, run_dir, (HANDOFF_FILENAME, CRITIQUE_FILENAME)
         )
         logger.info("run %s: archived and removed %s from the worktree", self.run_id, archived)
+        if archived:
+            self.store.merge_evidence(
+                self.run_id,
+                {"critique_archived": CRITIQUE_FILENAME in archived},
+            )
 
         info = inspect_repo(worktree)
         base = record.base_sha or ""
@@ -752,7 +889,12 @@ class Worker:
         # those are the validator's artifacts, not the run's work, and sweeping them
         # into the commit set would publish them. The set is fixed here and everything
         # downstream uses it.
-        owned = changed_paths(worktree, base)
+        prior_produced = {
+            str(path)
+            for path in record.evidence.get("validation_produced_paths", [])
+            if isinstance(path, str)
+        }
+        owned = sorted(set(changed_paths(worktree, base)) - prior_produced)
         logger.debug("run %s: run-owned paths before validation: %s", self.run_id, owned)
 
         repo_cfg = self.config.repository_for(Path(record.repo_path))
@@ -764,19 +906,41 @@ class Worker:
                     self._run_validation(
                         vector,
                         worktree,
-                        run_dir / f"validation-{index}.log",
+                        run_dir / f"validation-attempt-{attempt}-{index}.log",
                         repo_cfg.validation_timeout_seconds,
                     )
                 )
                 if not results[-1].passed:
-                    manifest = self._write_manifest(run_dir, results)
-                    raise PhaseFailure(
-                        f"validation command {index} ({' '.join(vector)}) failed with "
-                        f"exit code {results[-1].exit_code}. Manifest: {manifest}"
+                    manifest = self._write_manifest(run_dir, results, attempt=attempt)
+                    produced = sorted(
+                        prior_produced
+                        | (set(changed_paths(worktree, base)) - set(owned))
+                    )
+                    attempts = list(self.record.evidence.get("validation_attempts", []))
+                    attempts.append([item.model_dump() for item in results])
+                    self.store.merge_evidence(
+                        self.run_id,
+                        {
+                            "validation_manifest": str(manifest),
+                            "validations": [item.model_dump() for item in results],
+                            "validation_attempts": attempts,
+                            "validation_produced_paths": produced,
+                            "unvalidated": False,
+                        },
+                    )
+                    return ValidationFailure(
+                        attempt=attempt,
+                        command_index=index,
+                        result=results[-1],
+                        manifest=manifest,
                     )
 
-        manifest = self._write_manifest(run_dir, results)
-        produced = sorted(set(changed_paths(worktree, base)) - set(owned))
+        manifest = self._write_manifest(run_dir, results, attempt=attempt)
+        attempts = list(self.record.evidence.get("validation_attempts", []))
+        attempts.append([item.model_dump() for item in results])
+        produced = sorted(
+            prior_produced | (set(changed_paths(worktree, base)) - set(owned))
+        )
         if produced:
             logger.info(
                 "run %s: ignoring %d path(s) produced by validation, not by the agents: %s",
@@ -827,19 +991,24 @@ class Worker:
             owned_paths=owned,
             evidence={
                 "validation_manifest": str(manifest),
-                "critique_archived": CRITIQUE_FILENAME in archived,
+                "critique_archived": bool(
+                    self.record.evidence.get("critique_archived")
+                )
+                or CRITIQUE_FILENAME in archived,
                 "handoff_sha256": handoff_digest,
                 "critique_sha256": critique_digest,
                 "working_diff_sha256": diff_sha,
                 "validated_tree_sha": tree_sha,
                 "proposed_commit_message": proposed_message,
                 "validations": [item.model_dump() for item in results],
+                "validation_attempts": attempts,
                 "unvalidated": unvalidated,
                 "changed_path_count": len(owned),
                 "validation_produced_paths": produced,
                 "run_dir": str(run_dir),
             },
         )
+        return None
 
     def _run_validation(
         self, vector: list[str], worktree: Path, log_path: Path, timeout: int
@@ -888,8 +1057,14 @@ class Worker:
             tail=tail_text(log_path, 1500),
         )
 
-    def _write_manifest(self, run_dir: Path, results: list[ValidationResult]) -> Path:
-        path = run_dir / "validation-manifest.json"
+    def _write_manifest(
+        self,
+        run_dir: Path,
+        results: list[ValidationResult],
+        *,
+        attempt: int,
+    ) -> Path:
+        path = run_dir / f"validation-attempt-{attempt}-manifest.json"
         write_json(
             path,
             {

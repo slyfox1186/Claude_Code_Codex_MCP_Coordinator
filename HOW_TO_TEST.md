@@ -51,6 +51,17 @@ QUEUED -> CLAUDE_IMPLEMENTING -> HANDOFF_VALIDATING -> CODEX_REVIEWING
        -> AWAITING_FINALIZE
 ```
 
+If the first final gate fails, Claude gets one focused repair pass and the full gate runs
+again:
+
+```
+FINAL_VALIDATING -> CLAUDE_VALIDATION_REPAIRING -> FINAL_VALIDATING
+```
+
+A second failure stops the run with both attempts preserved. It is never valid to commit
+or push that failed run directly; publishing is available only through `duet_finalize`
+after `AWAITING_FINALIZE`.
+
 Progress is trustworthy only when the returned status has the retained `run_id` and
 `liveness.state` is `MODEL_ACTIVE`. `TRANSITIONING` means the worker is alive but the
 expected model child was not verified at that instant. `WORKER_MISSING` is a failure, not
@@ -88,6 +99,10 @@ Deletes the practice project and removes it from your config. Nothing left behin
 ```
 
 That one command allows the project, finds its test suite, and writes the config entry.
+For Python tests it first asks to create a project-isolated environment and installs all
+declared requirement files, the PEP 621 project package when present, and pytest. Say
+`y` so the generated command can import the same dependencies as the project; say `n`
+only when you intend to configure `validation_commands` yourself.
 Then work normally:
 
 ```bash
@@ -145,6 +160,7 @@ output to me as-is.
 | `not below an allowed_repo_roots entry` | run `./setup.sh add-repo <the project>` |
 | `already active ... max_parallel_global is N` | all global slots are occupied; wait, finalize, cancel, or raise the configured limit |
 | `refusing an in-place run ... dirty working tree` | commit or stash first, then retry on the same branch |
+| Validation fails twice | inspect both attempts with `agent-duet logs <run-id>`; do not publish the failed tree |
 | Refuses to finalize | read the reason it gives; something changed after the tests ran |
 
 ---

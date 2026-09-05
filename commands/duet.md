@@ -108,6 +108,9 @@ Restate the final task and acceptance criteria in one short block before calling
      process is verified alive.**
    - `CLAUDE_RECONCILING` with `MODEL_ACTIVE`: **Phase 3 of 3 — Claude's reconciliation
      process is verified alive and is adjudicating Codex's findings.**
+   - `CLAUDE_VALIDATION_REPAIRING` with `MODEL_ACTIVE`: **Validation repair — Claude's
+     repair process is verified alive and is addressing the first measured gate failure.
+     The coordinator will rerun the complete gate once after this.**
 
    If a model phase returns any other liveness state, report its `liveness.detail`
    instead of claiming that Claude or Codex is active. A repeated verified phase means
@@ -116,8 +119,9 @@ Restate the final task and acceptance criteria in one short block before calling
    If any status returns `CLEANUP_REQUIRED`, follow its `next_action` and retry `duet_cancel`
    once. Do not start or finalize another run while a recorded run process remains alive.
 
-   For a validation phase, say which two model phases it sits between or that final
-   validation follows phase 3.
+   For `FINAL_VALIDATING` with `COORDINATOR_ACTIVE`, say **Authoritative validation — the
+   coordinator is running the configured commands after phase 3.** Do not describe that
+   coordinator-only state as Claude or Codex working.
 
 5. **At `AWAITING_FINALIZE`, stop and report.** Summarize, from the returned evidence
    only:
@@ -169,5 +173,10 @@ Restate the final task and acceptance criteria in one short block before calling
   something about the repository or the environment needs a human decision. A
   `duet_finalize` refusal is not this: it is a guard telling you exactly what to look at,
   and step 7 says to look.
+- Never commit, push, or publish run-owned work directly with Git after a run is
+  `FAILED` or `CANCELLED`. `duet_finalize` is the only publishing path, and only a run in
+  `AWAITING_FINALIZE` qualifies. User wording such as "Finish up", "publish", or "push"
+  authorizes finalization only after the authoritative gate passes; it does not override
+  failed validation. Report the preserved evidence and leave the work uncommitted.
 - If the user closes the session, the run keeps going. To pick it back up later, call
   `duet_status` with the `run_id`.

@@ -15,6 +15,17 @@ Repository facts supplied by the coordinator (authoritative):
 
 {acceptance_criteria}
 
+## Authoritative validation
+
+The coordinator will run these exact command vectors immediately after this phase:
+
+{validation_commands}
+
+Run every configured command yourself after the final edit and repair any failure before
+finishing. A command vector is an argument list, not shell syntax; execute the same arguments
+from the working root. If a configured command cannot run, report the exact blocker rather than
+claiming the work is ready.
+
 ## What to do
 
 Root every filesystem search, listing, and glob at your working root above. Read outside
@@ -36,7 +47,8 @@ Work systematically through every critique item and the original acceptance crit
 Do not stop at the first plausible repair or because the initial implementation looked
 good; continue until every justified in-scope issue is resolved or explicitly reported.
 
-Implement every justified fix. Run all relevant validation. Inspect the final diff and
+Implement every justified fix. Run all relevant validation, including every authoritative
+command above. Inspect the final diff and
 status. Remove temporary or generated files and make sure no secrets and no unrelated
 changes remain.
 

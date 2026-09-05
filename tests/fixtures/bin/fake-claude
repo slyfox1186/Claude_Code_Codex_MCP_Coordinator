@@ -103,6 +103,15 @@ def main():
         time.sleep(3600)
         return 0
 
+    if behavior == "repair_validation" and "## Failed authoritative validation" in prompt:
+        (cwd / "validation-repaired.txt").write_text("repaired\n")
+        emit(
+            "Reproduced and repaired the measured validation failure.\n"
+            "Validation: every authoritative command passed.\n"
+            "COMMIT_MESSAGE: Repair the failed validation gate\n"
+        )
+        return 0
+
     if reconciling:
         if behavior == "reconcile_add_remote":
             subprocess.run(

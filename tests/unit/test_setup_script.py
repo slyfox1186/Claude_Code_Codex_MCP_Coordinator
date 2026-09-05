@@ -169,8 +169,14 @@ if [[ "$1" == "run" && "$2" == "--name" && "$3" == "agent-duet" ]]; then
     exit 1
 fi
 if [[ "$1" == "create" || "$1" == "install" ]]; then
-    mkdir -p "{conda_environment}/bin"
-    cp "{template}" "{conda_environment}/bin/python"
+    target="{conda_environment}"
+    previous=""
+    for argument in "$@"; do
+        if [[ "$previous" == "--prefix" ]]; then target="$argument"; break; fi
+        previous="$argument"
+    done
+    mkdir -p "$target/bin"
+    cp "{template}" "$target/bin/python"
     exit 0
 fi
 exit 1
@@ -470,6 +476,190 @@ def test_blank_repository_path_skips_registration(tmp_path: Path) -> None:
     config = (home / ".config/agent-duet/config.toml").read_text()
     assert "max_parallel_global = 2" in config
     assert "\n[[repositories]]\n" not in config
+
+
+def test_python_project_installs_declared_dependencies_in_isolated_environment(
+    tmp_path: Path,
+) -> None:
+    home, python_log, _, _, env = _guided_setup_environment(tmp_path)
+    project = tmp_path / "projects" / "sample"
+    project.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(project)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(project),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "initial",
+        ],
+        check=True,
+    )
+    (project / "test_sample.py").write_text("def test_sample(): assert True\n")
+    (project / "constraints.txt").write_text("example-runtime==1.2.3\n")
+    (project / "requirements.txt").write_text("example-runtime\n")
+    (project / "requirements-dev.txt").write_text("pytest==9.1.1\n")
+
+    result = _run_interactive_setup(
+        cwd=tmp_path,
+        env=env,
+        answers=f"n\n{project}\ny\n",
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert "isolated validation environment" in result.stdout
+    project_env_root = home / ".local/share/agent-duet/project-envs"
+    validation_pythons = list(project_env_root.glob("*/bin/python"))
+    assert len(validation_pythons) == 1
+    validation_python = validation_pythons[0]
+    assert validation_python != home / ".local/share/agent-duet/venv/bin/python"
+    pip_calls = [line for line in python_log.read_text().splitlines() if " -m pip " in line]
+    project_pip_calls = [line for line in pip_calls if line.startswith(f"{validation_python} ")]
+    assert len(project_pip_calls) == 1
+    assert f"-c {project / 'constraints.txt'}" in project_pip_calls[0]
+    assert f"-r {project / 'requirements.txt'}" in project_pip_calls[0]
+    assert f"-r {project / 'requirements-dev.txt'}" in project_pip_calls[0]
+    config = (home / ".config/agent-duet/config.toml").read_text()
+    assert f'["{validation_python}", "-m", "pytest", "-q"]' in config
+    assert (
+        f'["{home / ".local/share/agent-duet/venv/bin/python"}, "-m", "pytest", "-q"]'
+        not in config
+    )
+
+
+def test_declining_python_project_dependency_install_does_not_write_false_validation(
+    tmp_path: Path,
+) -> None:
+    home, _, _, _, env = _guided_setup_environment(tmp_path)
+    project = tmp_path / "projects" / "sample"
+    project.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(project)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(project),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "initial",
+        ],
+        check=True,
+    )
+    (project / "test_sample.py").write_text("def test_sample(): assert True\n")
+    (project / "requirements-dev.txt").write_text("pytest==9.1.1\n")
+
+    result = _run_interactive_setup(
+        cwd=tmp_path,
+        env=env,
+        answers=f"n\n{project}\nn\n",
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert "will be registered without an automatic validation command" in result.stdout
+    config = (home / ".config/agent-duet/config.toml").read_text()
+    assert "validation_commands = []" in config
+    assert not (home / ".local/share/agent-duet/project-envs").exists()
+
+
+def test_python_project_reuses_local_pytest_environment(tmp_path: Path) -> None:
+    home, _, _, _, env = _guided_setup_environment(tmp_path)
+    project = tmp_path / "projects" / "sample"
+    project.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(project)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(project),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "initial",
+        ],
+        check=True,
+    )
+    (project / "test_sample.py").write_text("def test_sample(): assert True\n")
+    local_python = project / ".venv/bin/python"
+    local_python.parent.mkdir(parents=True)
+    _write_executable(
+        local_python,
+        f"#!/bin/bash\nexec \"{REAL_PYTHON}\" \"$@\"\n",
+    )
+
+    result = _run_interactive_setup(
+        cwd=tmp_path,
+        env=env,
+        answers=f"n\n{project}\n",
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert f"using existing project environment: {local_python}" in result.stdout
+    config = (home / ".config/agent-duet/config.toml").read_text()
+    assert f'["{local_python}", "-m", "pytest", "-q"]' in config
+    assert not (home / ".local/share/agent-duet/project-envs").exists()
+
+
+def test_python_project_uses_separate_conda_prefix_environment(tmp_path: Path) -> None:
+    home, _, conda_log, env = _python_setup_environment(tmp_path, with_conda=True)
+    agent_python = home / "miniconda3/envs/agent-duet/bin/python"
+    agent_python.parent.mkdir(parents=True)
+    _write_fake_python(agent_python, tmp_path / "agent-python.log")
+    initial = _run_interactive_setup(cwd=tmp_path, env=env, answers="n\n\n")
+    assert initial.returncode == 0, initial.stdout
+    project = tmp_path / "projects" / "sample"
+    project.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(project)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(project),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "initial",
+        ],
+        check=True,
+    )
+    (project / "test_sample.py").write_text("def test_sample(): assert True\n")
+    (project / "requirements-dev.txt").write_text("pytest==9.1.1\n")
+
+    result = _run_interactive_setup(
+        cwd=tmp_path,
+        env=env,
+        answers="y\n",
+        args=("add-repo", str(project)),
+    )
+
+    assert result.returncode == 0, result.stdout
+    project_env_root = home / ".local/share/agent-duet/project-envs"
+    validation_pythons = list(project_env_root.glob("*/bin/python"))
+    assert len(validation_pythons) == 1
+    assert validation_pythons[0] != agent_python
+    conda_calls = conda_log.read_text()
+    assert f"create --prefix {validation_pythons[0].parents[1]} --yes python=3.13 pip" in conda_calls
+    assert "--name base" not in conda_calls
+    config = (home / ".config/agent-duet/config.toml").read_text()
+    assert f'["{validation_pythons[0]}", "-m", "pytest", "-q"]' in config
 
 
 def test_detected_conda_creates_only_named_agent_duet_environment(tmp_path: Path) -> None:
@@ -1129,5 +1319,8 @@ def test_documentation_leads_with_short_guided_install_and_consent_disclosure() 
         assert "-d" in document
         assert "--directory" in document
         assert "does not need to be a Git repository" in document or "ordinary folder" in document
+        assert "requirements-dev.txt" in document
+        assert "project" in document.lower() and "environment" in document.lower()
+        assert "pytest" in document.lower()
 
     assert readme.index("## Install") < readme.index("## Installing by hand")

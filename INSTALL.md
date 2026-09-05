@@ -24,6 +24,13 @@ The first dependency install can take a few minutes. Setup keeps the download pr
   updates, and Codex may add its bin directory to your shell profile's `PATH`.
 - `-d` or `--directory` accepts a relative path, full path, `~/...`, or a trailing `/`
   and skips the demo and project-path questions.
+- For a Python project with tests, setup creates a separate project validation environment
+  after asking for consent. It uses `constraints.txt` to constrain resolution; installs
+  every dependency from `requirements.txt`, `app/requirements.txt`,
+  `requirements-dev.txt`, `requirements-test.txt`, and `requirements.test.txt`; installs
+  a PEP 621 `pyproject.toml` project when present; then installs and verifies pytest.
+  These packages never enter Agent Duet's own environment, Conda `base`, or another
+  project's environment.
 - The project does not need to be a Git repository beforehand. Setup automatically
   creates the local baseline Agent Duet needs to compare Claude's and Codex's work by
   committing the existing non-ignored files. Nothing is uploaded and no remote is added.
@@ -52,6 +59,7 @@ ready. If sign-in was skipped, run the command setup printed. For deeper diagnos
 |---|---|
 | Python is older than 3.13 and Conda is absent | Install Python 3.13+, then rerun `./setup.sh` |
 | Signing in over SSH/headless | Run `codex login --device-auth` |
+| Python validation reports a missing import | Rerun `./setup.sh add-repo /path/to/project` and consent to refreshing its isolated dependencies |
 | A check fails | Run `agent-duet doctor` for the detailed reason |
 
 Agent sessions receive broad access to your machine. Read [SECURITY.md](SECURITY.md) before use.

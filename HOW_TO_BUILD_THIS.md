@@ -217,6 +217,13 @@ uploads nothing. Registration then detects the test suite (pytest,
 `npm test`, `cargo test`, or `go test`) and writes the `[[repositories]]` entry between
 markers so `./setup.sh remove-repo` can take it back out cleanly.
 
+For pytest projects, registration never points at Agent Duet's private Python. After
+consent, it creates a deterministic per-project environment under
+`~/.local/share/agent-duet/project-envs/`, installs every declared requirement file plus
+the PEP 621 project package when present, installs pytest, verifies the import, and writes
+that environment's absolute Python path. Conda creates the isolated prefix when available;
+otherwise system Python is used only to create the private environment.
+
 Those `validation_commands` are the coordinator's own authoritative check, run after both
 agents finish. They are command **vectors**, never shell strings, and they are read only
 from this config file — never from task text or from a file inside the repository under
@@ -262,6 +269,10 @@ Acceptance criteria:
 - The phases appear in order:
   `QUEUED → CLAUDE_IMPLEMENTING → HANDOFF_VALIDATING → CODEX_REVIEWING →
   REVIEW_INTEGRITY_CHECK → CLAUDE_RECONCILING → FINAL_VALIDATING → AWAITING_FINALIZE`.
+- If the first authoritative command fails, the exceptional path is
+  `FINAL_VALIDATING → CLAUDE_VALIDATION_REPAIRING → FINAL_VALIDATING`. The fresh Claude
+  process receives the measured failure and exact full command set. Only one repair and
+  one complete rerun are permitted; a second failure is terminal.
 - Claude performs both write phases; Codex performs exactly one review.
 - `CLAUDE_CRITIQUE_REQUEST.md` is written by Claude, and `GPT_CRITIQUE_FOR_CLAUDE.md` is
   written by **the coordinator**, never by Codex.
@@ -277,11 +288,13 @@ Inspect the evidence directly:
 
 ```bash
 ls -la "$HOME/.local/state/agent-duet/runs/<run-id>/"
-cat "$HOME/.local/state/agent-duet/runs/<run-id>/validation-manifest.json"
+cat "$HOME/.local/state/agent-duet/runs/<run-id>/validation-attempt-1-manifest.json"
 ```
 
 **Checks:** the run directory is `0700`, files are `0600`, the prompts and logs contain no
 credentials, and the manifest records each validation's argv, exit code, and timing.
+When repair was needed, inspect both `validation-attempt-1-manifest.json` and
+`validation-attempt-2-manifest.json`; public evidence also contains both attempts.
 
 ### Prove the run survives the client
 

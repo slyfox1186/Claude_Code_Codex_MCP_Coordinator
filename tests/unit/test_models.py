@@ -135,6 +135,8 @@ def test_happy_path_is_reachable():
         Phase.REVIEW_INTEGRITY_CHECK,
         Phase.CLAUDE_RECONCILING,
         Phase.FINAL_VALIDATING,
+        Phase.CLAUDE_VALIDATION_REPAIRING,
+        Phase.FINAL_VALIDATING,
         Phase.AWAITING_FINALIZE,
         Phase.FINALIZING,
         Phase.COMPLETE,

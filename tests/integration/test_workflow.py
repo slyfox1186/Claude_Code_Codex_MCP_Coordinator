@@ -327,6 +327,60 @@ def test_a_failing_validation_fails_the_run(tmp_path, work_root, repo, fake_log_
     assert final.phase is Phase.FAILED
     assert "validation command 0" in final.error
     assert final.validated_diff_sha256 is None
+    assert len(final.evidence["validation_attempts"]) == 2
+    assert all(
+        not attempt[0]["passed"] for attempt in final.evidence["validation_attempts"]
+    )
+    assert final.evidence["validation_manifest"]
+    assert "attempt-2" in final.evidence["validation_manifest"]
+    assert len(list(fake_log_dir.glob("claude-call-*.json"))) == 3
+
+
+def test_first_validation_failure_gets_one_repair_and_full_rerun(
+    tmp_path, work_root, repo, fake_log_dir, monkeypatch
+):
+    from agent_duet.config import ensure_state_dirs, load_config
+
+    from helpers import FIXTURE_BIN
+
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        f'allowed_repo_roots = ["{work_root}"]\n'
+        f'state_dir = "{tmp_path / "state"}"\n'
+        f'[claude]\nexecutable = "{FIXTURE_BIN / "fake-claude"}"\n'
+        f'[codex]\nexecutable = "{FIXTURE_BIN / "fake-codex"}"\n'
+        f'[[repositories]]\npath = "{repo}"\n'
+        'validation_commands = [["sh", "-c", '
+        '"touch validator-output.tmp; test -f validation-repaired.txt"], '
+        '["test", "-f", "impl.py"]]\n'
+    )
+    config = load_config(config_file)
+    ensure_state_dirs(config)
+    store = StateStore(config.db_path)
+    monkeypatch.setenv("FAKE_CLAUDE_BEHAVIOR", "repair_validation")
+    record = start(config, store, repo)
+
+    run_worker(config, store, record.run_id)
+
+    final = store.get(record.run_id)
+    assert final.phase is Phase.AWAITING_FINALIZE, final.error
+    attempts = final.evidence["validation_attempts"]
+    assert len(attempts) == 2
+    assert attempts[0][0]["passed"] is False
+    assert [item["passed"] for item in attempts[1]] == [True, True]
+    assert [item["argv"] for item in final.evidence["validations"]] == [
+        ["sh", "-c", "touch validator-output.tmp; test -f validation-repaired.txt"],
+        ["test", "-f", "impl.py"],
+    ]
+    assert "validator-output.tmp" not in final.owned_paths
+    assert "validator-output.tmp" in final.evidence["validation_produced_paths"]
+    assert len(list(fake_log_dir.glob("claude-call-*.json"))) == 3
+    repair_prompt = json.loads(
+        sorted(fake_log_dir.glob("claude-call-*.json"))[-1].read_text()
+    )["prompt"]
+    assert "Failed authoritative validation" in repair_prompt
+    assert "validator-output.tmp" in repair_prompt
+    assert "exit code `1`" in repair_prompt
 
 
 # ---------------------------------------------------------------------------

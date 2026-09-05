@@ -188,9 +188,12 @@ def show_logs(
             _section(f"{record.run_id[:8]} :: {stream.name}")
             _print_tail(stream, lines)
 
-        manifest = run_dir / "validation-manifest.json"
-        if manifest.is_file():
-            _section(f"{record.run_id[:8]} :: validation manifest")
+        manifests = sorted(run_dir.glob("validation-attempt-*-manifest.json"))
+        legacy_manifest = run_dir / "validation-manifest.json"
+        if legacy_manifest.is_file():
+            manifests.insert(0, legacy_manifest)
+        for manifest in manifests:
+            _section(f"{record.run_id[:8]} :: {manifest.name}")
             _print_tail(manifest, 0)
 
         artifacts = run_dir / "artifacts"
@@ -199,7 +202,12 @@ def show_logs(
                 _section(f"{record.run_id[:8]} :: artifact {artifact.name}")
                 _print_tail(artifact, lines)
 
-        for name in ("phase1.final_message.md", "phase3.final_message.md", "phase2.critique.md"):
+        for name in (
+            "phase1.final_message.md",
+            "phase2.critique.md",
+            "phase3.final_message.md",
+            "validation-repair.final_message.md",
+        ):
             candidate = run_dir / name
             if candidate.is_file():
                 _section(f"{record.run_id[:8]} :: {name}")

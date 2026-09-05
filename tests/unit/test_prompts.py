@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The child prompts are an interface between worker.py and three separate CLIs.
+"""The child prompts are an interface between worker.py and separate model phases.
 
 They are rendered with ``str.format``, so a placeholder the call site does not supply
 raises ``KeyError`` in the middle of a live run -- after a worktree exists and a phase
@@ -17,7 +17,12 @@ import pytest
 SRC = Path(__file__).resolve().parents[2] / "src"
 ROOT = SRC.parent
 PROMPTS = SRC / "prompts"
-TEMPLATES = ("claude_implement.md", "codex_review.md", "claude_reconcile.md")
+TEMPLATES = (
+    "claude_implement.md",
+    "codex_review.md",
+    "claude_reconcile.md",
+    "claude_validation_repair.md",
+)
 
 
 def _placeholders(template: str) -> set[str]:
@@ -85,8 +90,29 @@ def test_every_child_is_told_to_keep_searches_inside_its_working_root(name):
 def test_the_phase_deadline_comes_from_the_configured_timeout():
     """The number in the prompt has to be the number the coordinator actually enforces."""
     source = (SRC / "worker.py").read_text()
-    assert source.count("timeout_description=self._phase_timeout_description(") == 3
-    assert source.count("timeout_seconds=phase_timeout") == 3
+    assert source.count("timeout_description=self._phase_timeout_description(") == 4
+    assert source.count("timeout_seconds=phase_timeout") == 4
+
+
+@pytest.mark.parametrize(
+    "name",
+    ("claude_implement.md", "claude_reconcile.md", "claude_validation_repair.md"),
+)
+def test_write_capable_phases_receive_authoritative_validation_commands(name):
+    text = (PROMPTS / name).read_text()
+    assert "{validation_commands}" in text
+    assert "authoritative" in text.lower()
+
+
+def test_validation_command_formatter_preserves_exact_argv():
+    from agent_duet.worker import _format_validation_commands
+
+    rendered = _format_validation_commands(
+        [["/project env/bin/python", "-m", "pytest", "-q"], ["npm", "test"]]
+    )
+
+    assert '`["/project env/bin/python", "-m", "pytest", "-q"]`' in rendered
+    assert '`["npm", "test"]`' in rendered
 
 
 def test_phase_deadline_uses_the_tighter_global_safety_ceiling(config, store):
@@ -136,6 +162,10 @@ def test_every_child_is_forbidden_from_changing_branches(name):
             "claude_reconcile.md",
             ("worktree", "repo_path", "branch", "base_sha", "current_sha", "timeout_description"),
         ),
+        (
+            "claude_validation_repair.md",
+            ("worktree", "repo_path", "branch", "base_sha", "current_sha", "timeout_description"),
+        ),
     ],
 )
 def test_authoritative_prompt_values_are_formatted_as_literals(name, placeholders):
@@ -171,6 +201,9 @@ def test_duet_command_translates_internal_states_into_numbered_progress():
     assert "using existing branch" in text
     assert "no new branch" in text
     assert "Never report a raw phase enum by itself" in text
+    assert "Validation repair" in text
+    assert "Authoritative validation" in text
+    assert "COORDINATOR_ACTIVE" in text
 
 
 def test_duet_command_never_offers_a_branch_for_a_dirty_tree():
@@ -179,6 +212,16 @@ def test_duet_command_never_offers_a_branch_for_a_dirty_tree():
     assert "Never suggest or offer `review_branch`" in text
     assert "A dirty working tree is not permission" in text
     assert "or when the working tree is dirty" not in text
+
+
+def test_duet_command_never_bypasses_failed_validation_with_raw_git():
+    text = (ROOT / "commands" / "duet.md").read_text()
+    normalized = " ".join(text.split())
+    assert "Never commit, push, or publish run-owned work directly with Git" in text
+    assert "only publishing path" in text
+    assert "`AWAITING_FINALIZE`" in text
+    assert '"Finish up"' in text
+    assert "does not override failed validation" in normalized
 
 
 def test_start_tool_description_requires_an_explicit_branch_request():

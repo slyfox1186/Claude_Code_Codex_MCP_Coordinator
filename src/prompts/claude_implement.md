@@ -16,6 +16,16 @@ Repository facts supplied by the coordinator (authoritative, do not re-derive):
 
 {acceptance_criteria}
 
+## Authoritative validation
+
+The coordinator will run these exact command vectors after reconciliation:
+
+{validation_commands}
+
+Run every configured command yourself before handing work to the reviewer. A command vector is
+an argument list, not shell syntax; execute the same arguments from the working root. If a
+configured command cannot run, diagnose and repair its environment or report the exact blocker.
+
 ## How to work
 
 Root every filesystem search, listing, and glob at your working root above. Read outside
@@ -35,7 +45,8 @@ systematically until the task and acceptance criteria are satisfied; do not stop
 first plausible change or merely because the scope is broad. After important tool
 results, reassess the evidence and choose the best next action.
 
-Run every relevant validation available to you. Distinguish confirmed evidence from
+Run every relevant validation available to you, including the authoritative commands above.
+Distinguish confirmed evidence from
 hypotheses. Do not claim success without command evidence.
 
 ## Required handoff

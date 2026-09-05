@@ -139,6 +139,13 @@ Project registration allows the project's parent directory, detects its test sui
 markers so `remove-repo` takes it back out cleanly. If the folder has no Git history,
 setup automatically creates the same local-only baseline used by `-d`.
 
+For Python tests, setup asks before creating a separate validation environment for that
+project. It uses `constraints.txt` to constrain resolution; installs every dependency in
+`requirements.txt`, `app/requirements.txt`, `requirements-dev.txt`, and the
+test-requirements variants; installs a PEP 621 `pyproject.toml` project when present; then
+installs and verifies pytest. Target-project packages never enter Agent Duet's own
+environment, Conda `base`, or another project's environment.
+
 Two different projects can run concurrently by default. A project still gets only one
 active run, preventing two agent pairs from editing the same checkout. Adjust
 `max_parallel_global` from 1 through 16 in `~/.config/agent-duet/config.toml` if your
@@ -221,6 +228,18 @@ QUEUED -> CLAUDE_IMPLEMENTING -> HANDOFF_VALIDATING -> CODEX_REVIEWING
        -> AWAITING_FINALIZE -> FINALIZING -> COMPLETE
 ```
 
+If the first authoritative validation fails, one bounded repair path runs:
+
+```
+FINAL_VALIDATING -> CLAUDE_VALIDATION_REPAIRING -> FINAL_VALIDATING
+```
+
+Claude receives the measured exit code and redacted output, repairs the root cause, and
+the coordinator reruns the complete configured validation set. A second failure is
+terminal; both attempts remain in the evidence. A failed or cancelled run can never be
+published with raw Git through `/duet`—only `duet_finalize` may publish, and only from
+`AWAITING_FINALIZE`.
+
 `FAILED`, `CANCELLED`, and `COMPLETE` are terminal. Every transition is written to SQLite
 with a timestamp and a reason *before* the work that follows it happens.
 
@@ -258,6 +277,7 @@ agent-duet logs        # the most recent run, in full
 | `not below an allowed_repo_roots entry` | `./setup.sh add-repo <the project>` |
 | `already active ... max_parallel_global is N` | all global slots are occupied; wait, finalize, cancel, or raise the configured limit |
 | `refusing an in-place run ... dirty working tree` | commit or stash, then retry on the same branch |
+| Validation fails twice | run `agent-duet logs <run-id>`; both command results and output tails are preserved |
 | Refuses to finalize | read the reason; something changed after the tests ran |
 
 ---

@@ -1223,6 +1223,7 @@ _MODEL_CHILD_BY_PHASE = {
     Phase.CLAUDE_IMPLEMENTING: "phase1-claude",
     Phase.CODEX_REVIEWING: "phase2-codex",
     Phase.CLAUDE_RECONCILING: "phase3-claude",
+    Phase.CLAUDE_VALIDATION_REPAIRING: "validation-repair-claude",
 }
 
 

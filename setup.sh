@@ -578,6 +578,139 @@ install_command_file() {
 
 # -------------------------------------------------------------- add-repo ----
 
+project_has_python_tests() {
+  local target="$1"
+  find "$target" \
+    -path "$target/.git" -prune -o \
+    -path "$target/node_modules" -prune -o \
+    -path "$target/.venv" -prune -o \
+    -path "$target/venv" -prune -o \
+    -type f -name 'test_*.py' -print -quit | grep -q .
+}
+
+project_environment_key() {
+  "$PY" - "$1" <<'PY'
+import hashlib, pathlib, re, sys
+
+path = pathlib.Path(sys.argv[1])
+slug = re.sub(r"[^a-z0-9]+", "-", path.name.lower()).strip("-") or "project"
+slug = slug[:32].rstrip("-") or "project"
+digest = hashlib.sha256(str(path).encode()).hexdigest()[:10]
+print(f"{slug}-{digest}")
+PY
+}
+
+project_editable_requirement() {
+  "$PY" - "$1" <<'PY'
+import pathlib, sys, tomllib
+
+root = pathlib.Path(sys.argv[1])
+manifest = root / "pyproject.toml"
+if not manifest.is_file():
+    raise SystemExit(0)
+try:
+    project = tomllib.loads(manifest.read_text()).get("project")
+except (OSError, tomllib.TOMLDecodeError):
+    raise SystemExit(0)
+if not isinstance(project, dict):
+    raise SystemExit(0)
+extras = project.get("optional-dependencies", {})
+extra = next((name for name in ("dev", "test") if name in extras), "")
+suffix = f"[{extra}]" if extra else ""
+print(f"{root}{suffix}")
+PY
+}
+
+prepare_project_validation_environment() {
+  local target="$1" candidate conda_bin env_key env_root env_python system_python
+  local editable=""
+  local -a pip_args requirement_files
+  PROJECT_VALIDATION_PYTHON=""
+  export PROJECT_VALIDATION_PYTHON
+
+  project_has_python_tests "$target" || return 0
+
+  for candidate in "$target/.venv/bin/python" "$target/venv/bin/python"; do
+    if python_is_compatible "$candidate" && "$candidate" -c 'import pytest' \
+        >/dev/null 2>&1; then
+      PROJECT_VALIDATION_PYTHON="$candidate"
+      export PROJECT_VALIDATION_PYTHON
+      ok "using existing project environment: $candidate"
+      return 0
+    fi
+  done
+
+  requirement_files=()
+  for candidate in \
+      "$target/requirements.txt" \
+      "$target/app/requirements.txt" \
+      "$target/requirements-dev.txt" \
+      "$target/requirements-test.txt" \
+      "$target/requirements.test.txt"; do
+    [ ! -f "$candidate" ] || requirement_files+=("$candidate")
+  done
+  editable="$(project_editable_requirement "$target")"
+
+  step "Preparing an isolated validation environment"
+  info "Python tests were found. Their packages will not be installed into Agent Duet"
+  info "or Conda base; this project gets its own environment."
+  if [ -f "$target/constraints.txt" ]; then
+    info "Constraint file: $target/constraints.txt"
+  fi
+  for candidate in "${requirement_files[@]}"; do
+    info "Dependency file: $candidate"
+  done
+  if [ -n "$editable" ]; then
+    info "Project package: $editable"
+  fi
+  info "Pytest will also be installed and verified."
+  if ! ask_consent "Create/update this project's validation environment now?"; then
+    warn "declined; the project will be registered without an automatic validation command."
+    info "Run ./setup.sh add-repo '$target' later to configure validation."
+    return 0
+  fi
+
+  env_key="$(project_environment_key "$target")"
+  env_root="$DATA_DIR/project-envs/$env_key"
+  env_python="$env_root/bin/python"
+  conda_bin="$(find_conda || true)"
+  if ! python_is_compatible "$env_python"; then
+    mkdir -p "$DATA_DIR/project-envs"
+    if [ -n "$conda_bin" ]; then
+      "$conda_bin" create --prefix "$env_root" --yes python=3.13 pip \
+        || die "could not create the isolated validation environment for $target"
+    else
+      system_python="$(command -v python3 2>/dev/null || true)"
+      [ -n "$system_python" ] \
+        || die "python3 was not found; cannot create the validation environment."
+      python_is_compatible "$system_python" \
+        || die "$system_python is too old; project validation needs Python 3.13 or newer."
+      "$system_python" -m venv "$env_root" \
+        || die "could not create the isolated validation environment for $target"
+    fi
+  fi
+
+  pip_args=(--disable-pip-version-check)
+  if [ -f "$target/constraints.txt" ]; then
+    pip_args+=(-c "$target/constraints.txt")
+  fi
+  for candidate in "${requirement_files[@]}"; do
+    pip_args+=(-r "$candidate")
+  done
+  if [ -n "$editable" ]; then
+    pip_args+=(--editable "$editable")
+  fi
+  pip_args+=("pytest>=8.3")
+  "$env_python" -m pip install "${pip_args[@]}" \
+    || die "could not install the declared validation dependencies for $target"
+  "$env_python" -c 'import pytest; print(pytest.__version__)' >/dev/null \
+    || die "the project environment was created, but pytest cannot be imported."
+
+  PROJECT_VALIDATION_PYTHON="$env_python"
+  export PROJECT_VALIDATION_PYTHON
+  ok "project validation environment ready: $env_python"
+}
+
 ensure_git_baseline() {
   local target="$1" created_git=false
   if git -C "$target" rev-parse --verify HEAD >/dev/null 2>&1; then
@@ -623,12 +756,14 @@ do_add_repo() {
   [ -f "$CONFIG_FILE" ] || die "run ./setup.sh first — there is no config yet."
   ensure_git_baseline "$target" || return $?
   PY="$(pick_python)"
+  prepare_project_validation_environment "$target"
 
   step "Registering $target"
-  "$PY" - add "$CONFIG_FILE" "$target" <<'PY'
+  "$PY" - add "$CONFIG_FILE" "$target" "$PROJECT_VALIDATION_PYTHON" <<'PY'
 import json, pathlib, re, shutil, sys, tomllib
 
 action, config_path, repo = sys.argv[1], pathlib.Path(sys.argv[2]), sys.argv[3]
+validation_python = sys.argv[4]
 repo_path = pathlib.Path(repo)
 text = config_path.read_text()
 data = tomllib.loads(text)
@@ -676,10 +811,11 @@ if not any(r in repo_path.parents for r in roots):
 
 # Pick the check the coordinator will run itself once both agents are finished.
 def detect(root: pathlib.Path) -> tuple[list[str], str] | None:
-    py = sys.executable
     if list(root.glob("test_*.py")) or list(root.glob("*/test_*.py")) or \
        list(root.glob("tests/**/test_*.py")):
-        return [py, "-m", "pytest", "-q"], "pytest"
+        if not validation_python:
+            return None
+        return [validation_python, "-m", "pytest", "-q"], "pytest"
     pkg = root / "package.json"
     if pkg.is_file():
         try:

@@ -30,6 +30,7 @@ class Phase(StrEnum):
     REVIEW_INTEGRITY_CHECK = "REVIEW_INTEGRITY_CHECK"
     CLAUDE_RECONCILING = "CLAUDE_RECONCILING"
     FINAL_VALIDATING = "FINAL_VALIDATING"
+    CLAUDE_VALIDATION_REPAIRING = "CLAUDE_VALIDATION_REPAIRING"
     AWAITING_FINALIZE = "AWAITING_FINALIZE"
     FINALIZING = "FINALIZING"
     COMPLETE = "COMPLETE"
@@ -63,7 +64,15 @@ ALLOWED_TRANSITIONS: dict[Phase, frozenset[Phase]] = {
         {Phase.FINAL_VALIDATING, Phase.FAILED, Phase.CANCELLED}
     ),
     Phase.FINAL_VALIDATING: frozenset(
-        {Phase.AWAITING_FINALIZE, Phase.FAILED, Phase.CANCELLED}
+        {
+            Phase.CLAUDE_VALIDATION_REPAIRING,
+            Phase.AWAITING_FINALIZE,
+            Phase.FAILED,
+            Phase.CANCELLED,
+        }
+    ),
+    Phase.CLAUDE_VALIDATION_REPAIRING: frozenset(
+        {Phase.FINAL_VALIDATING, Phase.FAILED, Phase.CANCELLED}
     ),
     Phase.AWAITING_FINALIZE: frozenset({Phase.FINALIZING, Phase.FAILED, Phase.CANCELLED}),
     Phase.FINALIZING: frozenset({Phase.COMPLETE, Phase.FAILED}),
@@ -188,6 +197,7 @@ class Evidence(BaseModel):
     codex_readonly_verified: bool | None = None
     codex_mutations_detected: list[str] = Field(default_factory=list)
     validations: list[ValidationResult] = Field(default_factory=list)
+    validation_attempts: list[list[ValidationResult]] = Field(default_factory=list)
     #: True when the repository has no configured validation_commands, so nothing
     #: independent checked this run. Reported rather than implied by an empty
     #: ``validations`` list, which reads too easily as "all checks passed".
