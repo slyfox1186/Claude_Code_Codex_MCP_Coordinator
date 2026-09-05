@@ -672,6 +672,27 @@ def test_yes_flag_is_explicit_consent_for_required_cli_install(tmp_path: Path) -
     assert sentinel.read_text() == "owned by user"
 
 
+def test_yes_flag_does_not_consent_to_interactive_provider_logins(tmp_path: Path) -> None:
+    _, _, provider_log, _, env = _guided_setup_environment(
+        tmp_path, claude_authenticated=False, codex_authenticated=False
+    )
+    env["SSH_CONNECTION"] = "client server"
+
+    result = _run_interactive_setup(
+        cwd=tmp_path,
+        env=env,
+        args=("--yes",),
+        answers="n\nn\nn\n\n",
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert "Start Claude Code sign-in now? [y/N]" in result.stdout
+    assert "Start Codex sign-in now? [y/N]" in result.stdout
+    provider_calls = provider_log.read_text().splitlines()
+    assert "claude auth login" not in provider_calls
+    assert "codex login --device-auth" not in provider_calls
+
+
 def test_noninteractive_setup_prints_pending_login_without_launching_it(tmp_path: Path) -> None:
     _, _, provider_log, _, env = _guided_setup_environment(
         tmp_path, claude_authenticated=False, codex_authenticated=False

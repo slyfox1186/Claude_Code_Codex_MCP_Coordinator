@@ -53,12 +53,16 @@ ask_yes() {  # ask_yes "question" -> 0 for yes
   case "${reply:-y}" in [Nn]*) return 1 ;; *) return 0 ;; esac
 }
 
-ask_consent() {  # Third-party or environment changes default to no.
+ask_explicit_consent() {
   local reply
-  if [ "$ASSUME_YES" = true ]; then return 0; fi
   if [ ! -t 0 ]; then return 1; fi
   read -r -p "    $1 [y/N] " reply || true
   case "$reply" in [Yy]*) return 0 ;; *) return 1 ;; esac
+}
+
+ask_consent() {  # Required installations default to no; --yes consents.
+  if [ "$ASSUME_YES" = true ]; then return 0; fi
+  ask_explicit_consent "$1"
 }
 
 not_completed() {
@@ -310,7 +314,7 @@ offer_provider_logins() {
     if [ ! -t 0 ]; then
       info "Later, run: claude auth login"
       AUTH_PENDING=true
-    elif ask_consent "Start Claude Code sign-in now?"; then
+    elif ask_explicit_consent "Start Claude Code sign-in now?"; then
       claude auth login || die "Claude Code sign-in did not finish successfully."
       ok "Claude Code sign-in finished"
     else
@@ -330,7 +334,7 @@ offer_provider_logins() {
     if [ ! -t 0 ]; then
       info "Later, run: $codex_login"
       AUTH_PENDING=true
-    elif ask_consent "Start Codex sign-in now?"; then
+    elif ask_explicit_consent "Start Codex sign-in now?"; then
       if [ "$codex_login" = "codex login --device-auth" ]; then
         codex login --device-auth || die "Codex sign-in did not finish successfully."
       else
