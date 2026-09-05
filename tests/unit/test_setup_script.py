@@ -5,12 +5,13 @@ from __future__ import annotations
 import os
 import pty
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-REAL_PYTHON = Path("/home/jman/miniconda3/bin/python")
+REAL_PYTHON = Path(sys.executable)
 
 
 def _write_executable(path: Path, body: str) -> None:
@@ -21,23 +22,24 @@ def _write_executable(path: Path, body: str) -> None:
 def _fake_install_environment(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     home = tmp_path / "home"
     fake_bin = tmp_path / "bin"
-    python_bin = home / "miniconda3" / "bin"
+    python_bin = home / ".local/share/agent-duet/venv/bin"
     fake_bin.mkdir(parents=True)
     python_bin.mkdir(parents=True)
 
     _write_executable(
-        python_bin / "python3",
+        python_bin / "python",
         f"""#!/usr/bin/env bash
 if [[ "$1" == "-m" && "$2" == "pip" ]]; then
     exit 0
 fi
-exec {REAL_PYTHON} "$@"
+exec "{REAL_PYTHON}" "$@"
 """,
     )
     _write_executable(
         fake_bin / "claude",
         """#!/usr/bin/env bash
 if [[ "$1" == "--version" ]]; then echo "2.1.236 (Claude Code)"; fi
+if [[ "$*" == "mcp get agent_duet" ]]; then echo "Connected"; fi
 exit 0
 """,
     )
@@ -45,12 +47,13 @@ exit 0
         fake_bin / "codex",
         """#!/usr/bin/env bash
 if [[ "$1" == "--version" ]]; then echo "codex-cli 0.153.2"; fi
+if [[ "$*" == "mcp get agent_duet" ]]; then echo "duet_finalize"; fi
 exit 0
 """,
     )
     _write_executable(
         fake_bin / "agent-duet",
-        f"""#!{python_bin / "python3"}
+        f"""#!{python_bin / "python"}
 import sys
 
 if sys.argv[1:] == ["--version"]:
@@ -62,11 +65,18 @@ if sys.argv[1:] == ["--version"]:
     for name in tuple(env):
         if name.startswith("CONDA_"):
             env.pop(name)
+    for name in ("CODEX_INSTALL_DIR", "DUET_PYTHON"):
+        env.pop(name, None)
     env.update(
         {
             "HOME": str(home),
             "PATH": f"{fake_bin}:/usr/bin:/bin",
+            "SHELL": "/bin/bash",
             "NO_COLOR": "1",
+            "CODEX_HOME": str(home / ".codex"),
+            "CLAUDE_CONFIG_DIR": str(home / ".claude"),
+            "XDG_CONFIG_HOME": str(home / ".config"),
+            "XDG_DATA_HOME": str(home / ".local/share"),
         }
     )
     return home, env
@@ -87,6 +97,10 @@ if [[ "$*" == "--version" ]]; then
 fi
 if [[ "$*" == "{auth_command}" ]]; then
     exit {0 if authenticated else 1}
+fi
+if [[ "$*" == "mcp get agent_duet" ]]; then
+    [[ "{provider}" == "claude" ]] && echo "Connected" || echo "duet_finalize"
+    exit 0
 fi
 exit 0
 """,
@@ -116,7 +130,7 @@ if [[ "$1" == "-m" && "$2" == "pip" ]]; then
     fi
     exit 0
 fi
-exec {REAL_PYTHON} "$@"
+exec "{REAL_PYTHON}" "$@"
 """,
     )
 
@@ -167,11 +181,17 @@ exit 1
     for name in tuple(env):
         if name.startswith("CONDA_"):
             env.pop(name)
+    for name in ("CODEX_INSTALL_DIR", "DUET_PYTHON"):
+        env.pop(name, None)
     env.update(
         {
             "HOME": str(home),
             "PATH": f"{fake_bin}:/usr/bin:/bin",
             "NO_COLOR": "1",
+            "CODEX_HOME": str(home / ".codex"),
+            "CLAUDE_CONFIG_DIR": str(home / ".claude"),
+            "XDG_CONFIG_HOME": str(home / ".config"),
+            "XDG_DATA_HOME": str(home / ".local/share"),
         }
     )
     return home, python_log, conda_log, env
@@ -256,15 +276,22 @@ fi
     for name in tuple(env):
         if name.startswith("CONDA_"):
             env.pop(name)
+    for name in ("CODEX_INSTALL_DIR", "DUET_PYTHON"):
+        env.pop(name, None)
     env.update(
         {
             "HOME": str(home),
             "PATH": f"{fake_bin}:/usr/bin:/bin",
             "NO_COLOR": "1",
+            "CODEX_HOME": str(home / ".codex"),
+            "CLAUDE_CONFIG_DIR": str(home / ".claude"),
+            "XDG_CONFIG_HOME": str(home / ".config"),
+            "XDG_DATA_HOME": str(home / ".local/share"),
             "FAKE_CLAUDE_BINARY": str(claude_template),
             "FAKE_CODEX_BINARY": str(codex_template),
             "FAKE_CLAUDE_INSTALLER": str(claude_installer),
             "FAKE_CODEX_INSTALLER": str(codex_installer),
+            "SHELL": "/bin/bash",
         }
     )
     return home, python_log, provider_log, download_log, env
@@ -276,7 +303,7 @@ def _run_interactive_setup(
     master, slave = pty.openpty()
     try:
         process = subprocess.Popen(
-            ["bash", str(PROJECT_ROOT / "setup.sh"), *args],
+            ["/bin/bash", str(PROJECT_ROOT / "setup.sh"), *args],
             cwd=cwd,
             env=env,
             stdin=slave,
@@ -374,6 +401,16 @@ def test_system_python_creates_private_environment_without_conda(tmp_path: Path)
     assert "Miniconda" not in result.stdout
 
 
+def test_existing_private_environment_does_not_require_system_python(tmp_path: Path) -> None:
+    _, _, _, _, env = _guided_setup_environment(tmp_path)
+    _write_executable(tmp_path / "bin/python3", "#!/bin/bash\nexit 1\n")
+
+    result = _run_interactive_setup(cwd=tmp_path, env=env, answers="n\n\n")
+
+    assert result.returncode == 0, result.stdout
+    assert "using existing private Python environment" in result.stdout
+
+
 def test_existing_named_conda_environment_is_reused(tmp_path: Path) -> None:
     home, _, conda_log, env = _python_setup_environment(tmp_path, with_conda=True)
     env_python = home / "miniconda3/envs/agent-duet/bin/python"
@@ -437,6 +474,39 @@ def test_detected_conda_does_not_install_into_duet_python_override(tmp_path: Pat
     assert not [call for call in override_calls if " -m pip " in call]
 
 
+def test_no_conda_ignores_duet_python_override_and_creates_private_env(tmp_path: Path) -> None:
+    home, python_log, _, env = _python_setup_environment(tmp_path, with_conda=False)
+    override = tmp_path / "unrelated-env/bin/python"
+    override_log = tmp_path / "override.log"
+    override.parent.mkdir(parents=True)
+    _write_fake_python(override, override_log)
+    env["DUET_PYTHON"] = str(override)
+
+    result = _run_interactive_setup(cwd=tmp_path, env=env, answers="y\nn\n\n")
+
+    assert result.returncode == 0, result.stdout
+    managed_python = home / ".local/share/agent-duet/venv/bin/python"
+    assert managed_python.is_file()
+    assert any(" -m venv " in call for call in python_log.read_text().splitlines())
+    override_calls = override_log.read_text().splitlines() if override_log.exists() else []
+    assert not [call for call in override_calls if " -m pip " in call]
+
+
+def test_existing_system_python_launcher_is_not_reused(tmp_path: Path) -> None:
+    home, python_log, _, env = _python_setup_environment(tmp_path, with_conda=False)
+    fake_bin = tmp_path / "bin"
+    _write_executable(
+        fake_bin / "agent-duet",
+        f"#!{fake_bin / 'python3'}\nimport sys\n",
+    )
+
+    result = _run_interactive_setup(cwd=tmp_path, env=env, answers="y\nn\n\n")
+
+    assert result.returncode == 0, result.stdout
+    assert (home / ".local/share/agent-duet/venv/bin/python").is_file()
+    assert any(" -m venv " in call for call in python_log.read_text().splitlines())
+
+
 def test_old_system_python_does_not_trigger_conda_install(tmp_path: Path) -> None:
     _, _, _, env = _python_setup_environment(tmp_path, with_conda=False)
     _write_executable(tmp_path / "bin/python3", "#!/bin/bash\nexit 1\n")
@@ -487,6 +557,13 @@ def test_missing_provider_requires_consent_before_official_install(
     assert "installation not completed" in result.stdout
     assert not download_log.exists()
     assert not (home / ".local/bin" / missing_provider).exists()
+    if missing_provider == "claude":
+        assert f"{home}/.local/bin/claude" in result.stdout
+        assert f"{home}/.claude" in result.stdout
+    else:
+        assert f"{home}/.local/bin/codex" in result.stdout
+        assert f"{home}/.codex/packages/standalone" in result.stdout
+        assert f"{home}/.bashrc" in result.stdout
 
 
 @pytest.mark.parametrize(
@@ -504,12 +581,30 @@ def test_consent_installs_missing_provider_from_official_source(
         claude_present=missing_provider != "claude",
         codex_present=missing_provider != "codex",
     )
+    installer_temp = tmp_path / "installer-temp"
+    installer_temp.mkdir()
+    env["TMPDIR"] = str(installer_temp)
 
     result = _run_interactive_setup(cwd=tmp_path, env=env, answers="y\nn\n\n")
 
     assert result.returncode == 0, result.stdout
     assert download_log.read_text().splitlines() == [url]
     assert (home / ".local/bin" / missing_provider).is_file()
+    assert list(installer_temp.iterdir()) == []
+
+
+def test_failed_provider_installer_cleans_temporary_download(tmp_path: Path) -> None:
+    _, _, _, _, env = _guided_setup_environment(tmp_path, claude_present=False)
+    installer_temp = tmp_path / "installer-temp"
+    installer_temp.mkdir()
+    env["TMPDIR"] = str(installer_temp)
+    _write_executable(Path(env["FAKE_CLAUDE_INSTALLER"]), "#!/bin/bash\nexit 9\n")
+
+    result = _run_interactive_setup(cwd=tmp_path, env=env, answers="y\n")
+
+    assert result.returncode == 1, result.stdout
+    assert "official installer failed" in result.stdout
+    assert list(installer_temp.iterdir()) == []
 
 
 def test_ssh_codex_login_uses_device_auth_after_consent(tmp_path: Path) -> None:
@@ -556,6 +651,11 @@ def test_yes_flag_is_explicit_consent_for_required_cli_install(tmp_path: Path) -
         tmp_path, claude_present=False
     )
 
+    existing_demo = home / "duet-demo"
+    existing_demo.mkdir()
+    sentinel = existing_demo / "DO_NOT_DELETE"
+    sentinel.write_text("owned by user")
+
     result = subprocess.run(
         ["bash", str(PROJECT_ROOT / "setup.sh"), "--yes"],
         cwd=tmp_path,
@@ -569,6 +669,7 @@ def test_yes_flag_is_explicit_consent_for_required_cli_install(tmp_path: Path) -
     assert result.returncode == 0, result.stdout + result.stderr
     assert download_log.read_text().splitlines() == ["https://claude.ai/install.sh"]
     assert (home / ".local/bin/claude").is_file()
+    assert sentinel.read_text() == "owned by user"
 
 
 def test_noninteractive_setup_prints_pending_login_without_launching_it(tmp_path: Path) -> None:
@@ -611,6 +712,83 @@ def test_locked_dependencies_are_installed_before_editable_package(tmp_path: Pat
     assert launcher.resolve() == managed_python.parent / "agent-duet"
 
 
+def test_guided_setup_runs_health_check_before_finishing(tmp_path: Path) -> None:
+    _, python_log, _, _, env = _guided_setup_environment(tmp_path)
+
+    result = _run_interactive_setup(cwd=tmp_path, env=env, answers="n\n\n")
+
+    assert result.returncode == 0, result.stdout
+    assert "Everything works." in result.stdout
+    assert any(
+        "agent-duet doctor" in line for line in python_log.read_text().splitlines()
+    )
+
+
+def test_failed_health_check_does_not_report_setup_complete(tmp_path: Path) -> None:
+    home, _, _, _, env = _guided_setup_environment(tmp_path)
+    _write_executable(
+        tmp_path / "provider-templates/claude",
+        "#!/bin/bash\n"
+        '[[ "$*" == "--version" ]] && echo "2.1.236 (Claude Code)"\n'
+        '[[ "$*" == "auth status" ]] && exit 0\n'
+        "exit 0\n",
+    )
+
+    result = _run_interactive_setup(cwd=tmp_path, env=env, answers="")
+
+    assert result.returncode == 1, result.stdout
+    assert "not connected" in result.stdout
+    assert "Setup is done" not in result.stdout
+    assert (home / ".config/agent-duet/config.toml").is_file()
+
+
+def test_unsupported_os_fails_before_creating_python_environment(tmp_path: Path) -> None:
+    home, python_log, _, env = _python_setup_environment(tmp_path, with_conda=False)
+    _write_executable(tmp_path / "bin/uname", "#!/bin/bash\necho Darwin\n")
+
+    result = _run_interactive_setup(cwd=tmp_path, env=env, answers="y\n")
+
+    assert result.returncode == 1, result.stdout
+    assert "supports Linux only" in result.stdout
+    calls = python_log.read_text().splitlines() if python_log.exists() else []
+    assert not [call for call in calls if " -m venv " in call]
+    assert not (home / ".local/share/agent-duet/venv").exists()
+
+
+def test_missing_downloader_fails_before_creating_python_environment(tmp_path: Path) -> None:
+    home, python_log, _, env = _python_setup_environment(tmp_path, with_conda=False)
+    fake_bin = tmp_path / "bin"
+    (fake_bin / "claude").unlink()
+    _write_executable(fake_bin / "uname", "#!/bin/bash\necho Linux\n")
+    _write_executable(fake_bin / "git", "#!/bin/bash\nexit 0\n")
+    (fake_bin / "dirname").symlink_to("/usr/bin/dirname")
+    env["PATH"] = str(fake_bin)
+
+    result = _run_interactive_setup(cwd=tmp_path, env=env, answers="y\n")
+
+    assert result.returncode == 1, result.stdout
+    assert "curl or wget" in result.stdout
+    calls = python_log.read_text().splitlines() if python_log.exists() else []
+    assert not [call for call in calls if " -m venv " in call]
+    assert not (home / ".local/share/agent-duet/venv").exists()
+
+
+def test_missing_git_fails_before_creating_python_environment(tmp_path: Path) -> None:
+    home, python_log, _, env = _python_setup_environment(tmp_path, with_conda=False)
+    fake_bin = tmp_path / "bin"
+    _write_executable(fake_bin / "uname", "#!/bin/bash\necho Linux\n")
+    (fake_bin / "dirname").symlink_to("/usr/bin/dirname")
+    env["PATH"] = str(fake_bin)
+
+    result = _run_interactive_setup(cwd=tmp_path, env=env, answers="y\n")
+
+    assert result.returncode == 1, result.stdout
+    assert "git was not found" in result.stdout
+    calls = python_log.read_text().splitlines() if python_log.exists() else []
+    assert not [call for call in calls if " -m venv " in call]
+    assert not (home / ".local/share/agent-duet/venv").exists()
+
+
 def test_sourcing_setup_does_not_dispatch_commands(tmp_path: Path) -> None:
     marker = tmp_path / "sourced"
 
@@ -624,6 +802,18 @@ def test_sourcing_setup_does_not_dispatch_commands(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     assert marker.is_file()
     assert "Checking what is already on this machine" not in result.stdout
+
+
+def test_help_contains_only_the_header_comment() -> None:
+    result = subprocess.run(
+        ["bash", str(PROJECT_ROOT / "setup.sh"), "--help"],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "guided setup" in result.stdout
+    assert "set -euo pipefail" not in result.stdout
 
 
 def test_documentation_leads_with_short_guided_install_and_consent_disclosure() -> None:

@@ -80,7 +80,7 @@ Expected: FAIL because setup currently installs directly into whichever interpre
 
 - [ ] **Step 3: Implement isolated environment selection**
 
-Add `ask_consent` with a conservative `[y/N]` default. Detect Conda from `CONDA_EXE`, an executable `command -v conda` result, or `$HOME/miniconda3/bin/conda`, and give it precedence over any `DUET_PYTHON` override. Create or reuse the named environment with `conda create --name agent-duet -y python=3.13 pip`, and resolve its actual interpreter through `conda run` so custom `envs_dirs` configurations work. If repair is needed, target only `-n agent-duet`.
+Add `ask_consent` with a conservative `[y/N]` default. Detect Conda from `CONDA_EXE`, an executable `command -v conda` result, or `$HOME/miniconda3/bin/conda`. Create or reuse the named environment with `conda create --name agent-duet -y python=3.13 pip`, and resolve its actual interpreter through `conda run` so custom `envs_dirs` configurations work. If repair is needed, target only `-n agent-duet`. Never use an inherited `DUET_PYTHON` or existing launcher as the guided installer target.
 
 If Conda is absent, require the default `python3` to be 3.13 or newer and create a private virtual environment at `${XDG_DATA_HOME:-$HOME/.local/share}/agent-duet/venv`. All dependency installation then uses that environment's absolute Python. Never install Conda, call `sudo`, modify `base`, or run pip against system Python.
 
@@ -111,7 +111,7 @@ Expected: FAIL because setup currently requires both commands and does not check
 
 - [ ] **Step 3: Implement CLI setup**
 
-Print each official HTTPS source, obtain consent, download into the private temporary directory, and run with Bash. Refresh command lookup from `PATH` and known user-local binary directories without modifying shell startup files.
+Print each official HTTPS source, expected user-local files, updater behavior, and any possible shell-profile change before obtaining consent. Download into the private temporary directory and run with Bash. Refresh command lookup from `PATH` and known user-local binary directories.
 
 Check `claude auth status` and `codex login status`. Ask before starting authentication. Use `claude auth login`; use `codex login --device-auth` over SSH/headless and `codex login` otherwise. A non-interactive run prints the commands instead.
 

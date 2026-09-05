@@ -10,10 +10,13 @@ cd Claude_Code_Codex_MCP_Coordinator
 
 Follow the prompts. Setup explains each change and asks for consent before it:
 
-- If Conda is detected, setup creates a dedicated environment named `agent-duet`. Setup never installs Conda or changes `base` or any existing environment.
+- If Conda is detected, setup creates a dedicated environment named `agent-duet`.
+  Setup never installs Conda or changes `base` or any existing environment.
 - Without Conda, setup uses the default Python 3.13+ only to create a private Agent Duet
   environment. It does not install packages into system Python.
 - If Claude Code or Codex is missing, setup offers their official installer and waits for `y`.
+  Before asking, it shows the expected user-local files. These installers manage their own
+  updates, and Codex may add its bin directory to your shell profile's `PATH`.
 - Setup offers sign-in, then asks whether to make a throwaway demo. Answer `n` to enter the
   relative or full path to your real Git repository instead.
 
@@ -23,11 +26,17 @@ Check the finished installation:
 ./setup.sh check
 ```
 
-Requirements: Linux, Git, and Python 3.13 or newer. `curl` or `wget` is needed only when a
-provider CLI must be downloaded.
+Requirements: Linux and Git. Without Conda, the server also needs Python 3.13 or newer.
+`curl` or `wget` is needed only when a provider CLI must be downloaded.
 
 If you decline a required change, nothing from that step is installed; rerun `./setup.sh` when
 ready. If sign-in was skipped, run the command setup printed. For deeper diagnostics, run
 `agent-duet doctor`.
+
+| Problem | What to do |
+|---|---|
+| Python is older than 3.13 and Conda is absent | Install Python 3.13+, then rerun `./setup.sh` |
+| Signing in over SSH/headless | Run `codex login --device-auth` |
+| A check fails | Run `agent-duet doctor` for the detailed reason |
 
 Agent sessions receive broad access to your machine. Read [SECURITY.md](SECURITY.md) before use.

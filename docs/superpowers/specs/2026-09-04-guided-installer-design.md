@@ -39,8 +39,9 @@ The installer manages user-scoped software only:
 - Agent Duet, its locked Python dependencies, configuration, MCP registrations, and command files.
 
 It never installs Conda, invokes `sudo`, changes Conda's `base` environment, or installs packages
-into system Python. Git, Python 3.13+, and either `curl` or `wget` remain bootstrap requirements.
-Missing system-level tools produce one short distro-neutral error.
+into system Python. Git is required; Python 3.13+ is required when Conda is absent; and either
+`curl` or `wget` is required when a provider CLI is missing. Missing system-level tools produce
+one short distro-neutral error.
 
 Creating or repairing an isolated Python environment and installing either vendor CLI requires
 consent. Declining a required step stops cleanly and prints the one next command or action needed.
@@ -49,21 +50,24 @@ run that provider until the user signs in.
 
 ## Guided Flow
 
-1. Detect Linux, Git, Python 3.13+, and a supported download command.
+1. Before any mutation, detect Linux and Git, and require a supported download command when a
+   provider CLI is missing. When Conda is absent, also require Python 3.13+ before environment
+   creation.
 2. Detect Conda through `CONDA_EXE`, an executable returned by `command -v conda`, or
-   `$HOME/miniconda3/bin/conda`. A detected Conda installation always takes precedence over
-   `DUET_PYTHON`, so setup cannot install into an unrelated or base environment by accident.
+   `$HOME/miniconda3/bin/conda`.
 3. When Conda exists, show the exact command and ask before creating a dedicated environment named
    `agent-duet` with Python 3.13 and pip. Reuse that environment when it is already compatible;
    repair only that named environment when necessary. Resolve its actual interpreter through
    `conda run` so configured environment directories work. Never modify `base` or another
    environment.
-4. When Conda does not exist, honor an explicitly supplied compatible `DUET_PYTHON`; otherwise
-   require a compatible default `python3`, show the private environment path, and ask before
-   creating an Agent Duet virtual environment under the user's data directory. Never pass pip
-   operations to the system interpreter itself.
-5. If Claude Code is absent, show Anthropic's official installer URL and ask before running it.
-6. If Codex is absent, show OpenAI's official installer URL and ask before running it.
+4. When Conda does not exist, require a compatible default `python3`, show the private environment
+   path, and ask before creating an Agent Duet virtual environment under the user's data directory.
+   Never reuse an existing launcher or `DUET_PYTHON`, and never pass pip operations to the system
+   interpreter itself.
+5. If Claude Code is absent, show Anthropic's official installer URL, expected user-local files,
+   shell integration, and self-update behavior, then ask before running it.
+6. If Codex is absent, show OpenAI's official installer URL, effective install/package paths, and
+   the shell profile where it may add a managed `PATH` block, then ask before running it.
 7. Check authentication with `claude auth status` and `codex login status`. If either CLI is not
    authenticated, offer to start its login. Use `claude auth login` for Claude. Use
    `codex login --device-auth` for SSH/headless sessions and `codex login` otherwise. If the
@@ -87,8 +91,9 @@ never logs, copies, or requests an API key.
 - `./setup.sh`: guided prerequisite bootstrap, Agent Duet install, verification, optional demo.
 - `./setup.sh install`: install and repair Agent Duet; report missing prerequisites without
   downloading them.
-- `./setup.sh --yes`: explicit blanket consent for prerequisite installations. A non-interactive
-  run still leaves provider authentication for the user and prints the required login commands.
+- `./setup.sh --yes`: explicit blanket consent for prerequisite installations only. It never
+  consents to demo creation or deletion. A non-interactive run still leaves provider authentication
+  for the user and prints the required login commands.
 - Existing `add-repo`, `remove-repo`, `check`, `demo`, and `uninstall` behavior remains compatible.
 
 Prompts for third-party changes use a conservative `[y/N]` default. The existing optional demo

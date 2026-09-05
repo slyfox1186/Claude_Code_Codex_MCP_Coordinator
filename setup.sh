@@ -47,7 +47,6 @@ die()  { printf '\n%serror:%s %s\n\n' "$R" "$N" "$*" >&2; exit 1; }
 
 ask_yes() {  # ask_yes "question" -> 0 for yes
   local prompt="$1"
-  if [ "$ASSUME_YES" = true ]; then return 0; fi
   if [ ! -t 0 ]; then return 1; fi
   local reply
   read -r -p "    $prompt [Y/n] " reply || true
@@ -118,22 +117,6 @@ find_conda() {
   return 1
 }
 
-installed_agent_python() {
-  local bin shebang
-  bin="$(command -v agent-duet 2>/dev/null || true)"
-  [ -n "$bin" ] || return 1
-  shebang="$(head -1 "$bin" 2>/dev/null || true)"
-  case "$shebang" in
-    '#!'*)
-      shebang="${shebang#\#!}"
-      shebang="${shebang%% *}"
-      python_is_compatible "$shebang" || return 1
-      printf '%s\n' "$shebang"
-      ;;
-    *) return 1 ;;
-  esac
-}
-
 conda_agent_python() {
   local conda_bin="$1"
   "$conda_bin" run --name agent-duet python -c \
@@ -141,7 +124,7 @@ conda_agent_python() {
 }
 
 prepare_python_environment() {
-  local conda_bin env_python system_python existing_python
+  local conda_bin env_python system_python
 
   conda_bin="$(find_conda || true)"
   if [ -n "$conda_bin" ]; then
@@ -175,17 +158,11 @@ prepare_python_environment() {
     return 0
   fi
 
-  if [ -n "${DUET_PYTHON:-}" ]; then
-    python_is_compatible "$DUET_PYTHON" \
-      || die "$DUET_PYTHON is too old. agent-duet needs Python 3.13 or newer."
-    return 0
-  fi
-
-  existing_python="$(installed_agent_python || true)"
-  if [ -n "$existing_python" ]; then
-    DUET_PYTHON="$existing_python"
+  env_python="$VENV_DIR/bin/python"
+  if python_is_compatible "$env_python"; then
+    DUET_PYTHON="$env_python"
     export DUET_PYTHON
-    ok "using the existing Agent Duet interpreter: $existing_python"
+    ok "using existing private Python environment: $env_python"
     return 0
   fi
 
@@ -194,14 +171,6 @@ prepare_python_environment() {
     || die "python3 was not found. Install Python 3.13 or newer, then run ./setup.sh again."
   python_is_compatible "$system_python" \
     || die "$system_python is too old. Install Python 3.13 or newer, then run ./setup.sh again."
-
-  env_python="$VENV_DIR/bin/python"
-  if python_is_compatible "$env_python"; then
-    DUET_PYTHON="$env_python"
-    export DUET_PYTHON
-    ok "using existing private Python environment: $env_python"
-    return 0
-  fi
 
   step "Preparing an isolated Python environment"
   info "Conda was not found. Agent Duet will create a private Python environment at:"
@@ -226,13 +195,10 @@ pick_python() {
     if [ -n "$bin" ] && python_is_compatible "$bin"; then echo "$bin"; return; fi
     die "the dedicated Python environment is missing; run ./setup.sh first."
   fi
-  if [ -n "${DUET_PYTHON:-}" ]; then echo "$DUET_PYTHON"; return; fi
   if python_is_compatible "$VENV_DIR/bin/python"; then
     echo "$VENV_DIR/bin/python"
     return
   fi
-  bin="$(installed_agent_python || true)"
-  if [ -n "$bin" ]; then echo "$bin"; return; fi
   die "the private Python environment is missing; run ./setup.sh first."
 }
 
@@ -247,7 +213,9 @@ PY
 
 refresh_user_path() {
   local directory
-  for directory in "$HOME/.local/bin" "$HOME/.claude/local/bin" "$HOME/.codex/bin"; do
+  for directory in "${CODEX_INSTALL_DIR:-}" "$HOME/.local/bin" \
+                   "$HOME/.claude/local/bin" "$HOME/.codex/bin"; do
+    [ -n "$directory" ] || continue
     case ":$PATH:" in
       *":$directory:"*) ;;
       *) PATH="$directory:$PATH" ;;
@@ -255,6 +223,22 @@ refresh_user_path() {
   done
   export PATH
   hash -r
+}
+
+preflight_guided_setup() {
+  refresh_user_path
+  [ "$(uname -s)" = "Linux" ] || die "the guided installer currently supports Linux only."
+  command -v git >/dev/null 2>&1 || die "git was not found. Install Git, then run ./setup.sh again."
+  if [ -n "${CODEX_INSTALL_DIR:-}" ]; then
+    case "$CODEX_INSTALL_DIR" in
+      /*) ;;
+      *) die "CODEX_INSTALL_DIR must be an absolute path." ;;
+    esac
+  fi
+  if { ! command -v claude >/dev/null 2>&1 || ! command -v codex >/dev/null 2>&1; } &&
+     ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    die "install curl or wget, then run ./setup.sh again."
+  fi
 }
 
 download_installer() {
@@ -269,14 +253,15 @@ download_installer() {
 }
 
 install_provider_cli() {
-  local label="$1" command_name="$2" url="$3"
+  local label="$1" command_name="$2" url="$3" expected_changes="$4"
   refresh_user_path
   if command -v "$command_name" >/dev/null 2>&1; then return 0; fi
 
   step "Installing $label"
   info "$label is not installed. The official installer is:"
   info "  $url"
-  info "It installs for your user account only; setup.sh never uses sudo."
+  info "$expected_changes"
+  info "The installer may maintain its own updates. setup.sh never uses sudo."
   if ! ask_consent "Download and run this official installer now?"; then not_completed; fi
 
   INSTALL_TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/agent-duet-install.XXXXXX")" \
@@ -297,10 +282,22 @@ install_provider_cli() {
 }
 
 prepare_provider_clis() {
-  [ "$(uname -s)" = "Linux" ] || die "the guided installer currently supports Linux only."
-  command -v git >/dev/null 2>&1 || die "git was not found. Install Git, then run ./setup.sh again."
-  install_provider_cli "Claude Code" "claude" "https://claude.ai/install.sh"
-  install_provider_cli "Codex" "codex" "https://chatgpt.com/codex/install.sh"
+  local codex_bin_dir="${CODEX_INSTALL_DIR:-$HOME/.local/bin}"
+  local codex_home="${CODEX_HOME:-$HOME/.codex}"
+  local shell_profile="$HOME/.profile"
+  local claude_changes codex_changes
+  case "${SHELL##*/}" in
+    bash) shell_profile="$HOME/.bashrc" ;;
+    zsh) shell_profile="$HOME/.zshrc" ;;
+  esac
+  claude_changes="Expected user files: $HOME/.local/bin/claude and files under $HOME/.claude; its installer may update shell integration."
+  codex_changes="Expected user files: $codex_bin_dir/codex and $codex_home/packages/standalone; when needed, its installer adds a managed PATH block to $shell_profile."
+  install_provider_cli \
+    "Claude Code" "claude" "https://claude.ai/install.sh" \
+    "$claude_changes"
+  install_provider_cli \
+    "Codex" "codex" "https://chatgpt.com/codex/install.sh" \
+    "$codex_changes"
 }
 
 offer_provider_logins() {
@@ -533,7 +530,9 @@ PY
   step "Installing the /duet command"
   install_command_file "$CLAUDE_COMMANDS_DIR" "Claude Code"
   install_command_file "$CODEX_HOME_DIR/prompts" "Codex"
+}
 
+print_setup_complete() {
   printf '\n%sSetup is done.%s\n' "$G$B" "$N"
   info "Next:  ./setup.sh add-repo /path/to/your/project"
   info "   or: ./setup.sh demo        (try it on a throwaway project first)"
@@ -887,7 +886,11 @@ main() {
   for arg in "$@"; do
     case "$arg" in
       -y|--yes)  ASSUME_YES=true ;;
-      -h|--help) sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; return 0 ;;
+      -h|--help)
+        awk 'NR < 3 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' \
+          "${BASH_SOURCE[0]}"
+        return 0
+        ;;
       *)         args+=("$arg") ;;
     esac
   done
@@ -895,17 +898,20 @@ main() {
   refresh_user_path
 
   case "${1:-}" in
-    install)     do_install ;;
+    install)     do_install; do_check; print_setup_complete ;;
     add-repo)    do_add_repo "${2:-$PWD}" ;;
     remove-repo) do_remove_repo "${2:-$PWD}" ;;
     check)       do_check ;;
     demo)        do_demo "${2:-}" ;;
     uninstall)   do_uninstall ;;
     "")
+      preflight_guided_setup
       prepare_python_environment
       prepare_provider_clis
       offer_provider_logins
       do_install
+      do_check
+      print_setup_complete
       if [ "$AUTH_PENDING" = true ]; then
         warn "Installation finished, but sign-in is still required before Agent Duet can run."
       fi

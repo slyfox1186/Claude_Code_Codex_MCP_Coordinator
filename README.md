@@ -63,15 +63,18 @@ cd Claude_Code_Codex_MCP_Coordinator
 That is the whole installation. Setup explains what it needs and asks for consent before
 creating an environment or installing a missing provider CLI.
 
-- If Conda is detected, it creates a dedicated environment named `agent-duet`. Setup never installs Conda or changes `base` or another environment.
+- If Conda is detected, it creates a dedicated environment named `agent-duet`.
+  Setup never installs Conda or changes `base` or another environment.
 - Without Conda, it uses the default Python 3.13+ only to create a private environment;
   packages are not installed into system Python.
 - If Claude Code or Codex is missing, it offers the official installer. It also offers
-  sign-in and a throwaway demo.
+  sign-in and a throwaway demo. Before consent, setup shows the expected user-local files;
+  the vendor installers manage their own updates, and Codex may add a `PATH` block to your
+  shell profile.
 - Answer `n` to the demo and setup asks for your real repository's relative or full path.
 
-Requirements: Linux, Git, and Python 3.13+. `curl` or `wget` is needed only if a provider
-CLI must be downloaded. See **[INSTALL.md](INSTALL.md)** for the short guide and read
+Requirements: Linux and Git, plus Python 3.13+ when Conda is absent. `curl` or `wget` is
+needed only if a provider CLI must be downloaded. See **[INSTALL.md](INSTALL.md)** and read
 **[SECURITY.md](SECURITY.md)** before use.
 
 Setup never uses `sudo`. It validates generated configuration, backs up files it replaces
