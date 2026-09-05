@@ -23,7 +23,9 @@ STATE_DIR="$HOME/.local/state/agent-duet"
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/agent-duet"
 VENV_DIR="$DATA_DIR/venv"
 CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
-CLAUDE_COMMANDS_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/commands"
+CLAUDE_CONFIG_ROOT="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+CLAUDE_COMMANDS_DIR="$CLAUDE_CONFIG_ROOT/commands"
+CLAUDE_SETTINGS_FILE="$CLAUDE_CONFIG_ROOT/settings.json"
 DEMO_ROOT="$HOME/duet-demo"
 DEMO_REPO="$DEMO_ROOT/smoke"
 DEMO_REMOTE="$DEMO_ROOT/smoke-remote.git"
@@ -494,6 +496,9 @@ PY
     "{\"type\":\"stdio\",\"command\":\"$duet_bin\",\"args\":[],\"env\":{},\"timeout\":120000}" \
     >/dev/null || die "claude mcp add-json failed."
   ok "registered (120s tool timeout; duet_wait returns within 90s)"
+  "$PY" "$REPO_ROOT/src/claude_permissions.py" install "$CLAUDE_SETTINGS_FILE" \
+    || die "could not configure Claude Code's read-only Agent Duet polling permissions."
+  ok "read-only polling permissions configured"
 
   step "Registering agent-duet with Codex"
   codex mcp remove agent_duet >/dev/null 2>&1 || true
@@ -996,8 +1001,20 @@ do_check() {
     warn "not connected — run ./setup.sh"; failed=1
   fi
 
-  step "Can Codex see it?"
+  step "Can Claude Code poll without auto-mode classifier approval?"
   PY="$(pick_python)"
+  local permission_report
+  if permission_report="$(
+      "$PY" "$REPO_ROOT/src/claude_permissions.py" check "$CLAUDE_SETTINGS_FILE" 2>&1
+  )"; then
+    ok "both exact read-only polling permissions are configured"
+  else
+    warn "$permission_report"
+    info "Run ./setup.sh install to repair only the Agent Duet installation."
+    failed=1
+  fi
+
+  step "Can Codex see it?"
   if codex_registration_is_valid; then
     ok "connected, all five tools enabled"
   else
@@ -1120,6 +1137,18 @@ do_uninstall() {
   step "Removing registrations"
   claude mcp remove agent_duet --scope user >/dev/null 2>&1 && ok "unregistered from Claude Code" || note "was not registered with Claude Code"
   codex mcp remove agent_duet >/dev/null 2>&1 && ok "unregistered from Codex" || note "was not registered with Codex"
+  if PY="$(pick_python 2>/dev/null)"; then
+    if "$PY" "$REPO_ROOT/src/claude_permissions.py" remove "$CLAUDE_SETTINGS_FILE" \
+        >/dev/null; then
+      ok "removed read-only Claude polling permissions"
+    else
+      warn "could not remove Agent Duet rules from $CLAUDE_SETTINGS_FILE"
+      info "Remove mcp__agent_duet__duet_status and mcp__agent_duet__duet_wait manually."
+    fi
+  else
+    warn "the Agent Duet Python environment is missing; polling permissions were not removed"
+    info "Remove mcp__agent_duet__duet_status and mcp__agent_duet__duet_wait manually."
+  fi
   for f in "$CLAUDE_COMMANDS_DIR/duet.md" "$CODEX_HOME_DIR/prompts/duet.md"; do
     [ -f "$f" ] && rm -f "$f" && ok "removed $f" || true
   done

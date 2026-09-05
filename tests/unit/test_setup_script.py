@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import pty
 import subprocess
@@ -12,11 +13,28 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REAL_PYTHON = Path(sys.executable)
+POLL_PERMISSIONS = (
+    "mcp__agent_duet__duet_status",
+    "mcp__agent_duet__duet_wait",
+)
 
 
 def _write_executable(path: Path, body: str) -> None:
     path.write_text(body)
     path.chmod(0o755)
+
+
+def _write_claude_poll_permissions(home: Path, *other_allow: str) -> Path:
+    settings = home / ".claude/settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(
+        json.dumps(
+            {"permissions": {"allow": [*other_allow, *POLL_PERMISSIONS]}},
+            indent=2,
+        )
+        + "\n"
+    )
+    return settings
 
 
 def _fake_install_environment(tmp_path: Path) -> tuple[Path, dict[str, str]]:
@@ -1065,8 +1083,140 @@ def test_guided_setup_tells_users_to_restart_open_clients(tmp_path: Path) -> Non
     assert "keep the old MCP process and /duet instructions" in result.stdout
 
 
+def test_install_adds_only_exact_read_only_claude_poll_permissions(tmp_path: Path) -> None:
+    home, _, _, _, env = _guided_setup_environment(tmp_path)
+
+    result = _run_interactive_setup(cwd=tmp_path, env=env, answers="n\n\n")
+
+    assert result.returncode == 0, result.stdout
+    settings = json.loads((home / ".claude/settings.json").read_text())
+    assert settings["permissions"]["allow"] == list(POLL_PERMISSIONS)
+    assert "mcp__agent_duet__*" not in settings["permissions"]["allow"]
+    assert "read-only polling permissions configured" in result.stdout
+
+
+def test_install_preserves_existing_claude_settings(tmp_path: Path) -> None:
+    home, _, _, _, env = _guided_setup_environment(tmp_path)
+    settings_path = home / ".claude/settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(
+        json.dumps(
+            {
+                "permissions": {
+                    "allow": ["Bash(pacman -Q*)"],
+                    "defaultMode": "auto",
+                },
+                "theme": "dark",
+            }
+        )
+        + "\n"
+    )
+
+    result = _run_interactive_setup(cwd=tmp_path, env=env, answers="n\n\n")
+
+    assert result.returncode == 0, result.stdout
+    settings = json.loads(settings_path.read_text())
+    assert settings == {
+        "permissions": {
+            "allow": ["Bash(pacman -Q*)", *POLL_PERMISSIONS],
+            "defaultMode": "auto",
+        },
+        "theme": "dark",
+    }
+    backup = Path(f"{settings_path}.duet-backup")
+    assert json.loads(backup.read_text())["permissions"]["allow"] == [
+        "Bash(pacman -Q*)"
+    ]
+
+
+def test_install_permission_repair_is_idempotent(tmp_path: Path) -> None:
+    home, _, _, _, env = _guided_setup_environment(tmp_path)
+
+    first = _run_interactive_setup(cwd=tmp_path, env=env, answers="n\n\n")
+    assert first.returncode == 0, first.stdout
+    settings_path = home / ".claude/settings.json"
+    before = settings_path.read_bytes()
+    before_mtime = settings_path.stat().st_mtime_ns
+
+    second = _run_interactive_setup(cwd=tmp_path, env=env, answers="n\n\n")
+
+    assert second.returncode == 0, second.stdout
+    assert settings_path.read_bytes() == before
+    assert settings_path.stat().st_mtime_ns == before_mtime
+    assert json.loads(settings_path.read_text())["permissions"]["allow"] == list(
+        POLL_PERMISSIONS
+    )
+
+
+def test_install_refuses_malformed_claude_settings_without_damage(
+    tmp_path: Path,
+) -> None:
+    home, _, _, _, env = _guided_setup_environment(tmp_path)
+    settings_path = home / ".claude/settings.json"
+    settings_path.parent.mkdir(parents=True)
+    original = b'{"permissions": {"allow": ['
+    settings_path.write_bytes(original)
+
+    result = _run_interactive_setup(cwd=tmp_path, env=env, answers="n\n\n")
+
+    assert result.returncode == 1, result.stdout
+    assert "could not parse Claude Code settings" in result.stdout
+    assert "could not configure Claude Code's read-only" in result.stdout
+    assert settings_path.read_bytes() == original
+    assert not Path(f"{settings_path}.duet-backup").exists()
+
+
+def test_check_fails_when_a_claude_poll_permission_is_missing(tmp_path: Path) -> None:
+    home, _, _, _, env = _guided_setup_environment(tmp_path)
+    installed = _run_interactive_setup(cwd=tmp_path, env=env, answers="n\n\n")
+    assert installed.returncode == 0, installed.stdout
+    settings_path = _write_claude_poll_permissions(home)
+    settings = json.loads(settings_path.read_text())
+    settings["permissions"]["allow"].remove(POLL_PERMISSIONS[1])
+    settings_path.write_text(json.dumps(settings) + "\n")
+
+    result = subprocess.run(
+        ["bash", str(PROJECT_ROOT / "setup.sh"), "check"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 1, result.stdout
+    assert "polling permissions are missing" in result.stdout
+    assert "run ./setup.sh install" in result.stdout.lower()
+
+
+def test_uninstall_removes_only_claude_poll_permissions(tmp_path: Path) -> None:
+    home, _, _, _, env = _guided_setup_environment(tmp_path)
+    settings_path = _write_claude_poll_permissions(home, "Bash(pacman -Q*)")
+    installed = _run_interactive_setup(cwd=tmp_path, env=env, answers="n\n\n")
+    assert installed.returncode == 0, installed.stdout
+    assert all(
+        rule in json.loads(settings_path.read_text())["permissions"]["allow"]
+        for rule in POLL_PERMISSIONS
+    )
+
+    result = subprocess.run(
+        ["bash", str(PROJECT_ROOT / "setup.sh"), "uninstall"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    settings = json.loads(settings_path.read_text())
+    assert settings["permissions"]["allow"] == ["Bash(pacman -Q*)"]
+    assert "removed read-only Claude polling permissions" in result.stdout
+
+
 def test_health_check_surfaces_missing_project_warning_without_failing(tmp_path: Path) -> None:
     home, env = _fake_install_environment(tmp_path)
+    _write_claude_poll_permissions(home)
     fake_agent_duet = tmp_path / "bin/agent-duet"
     missing_project = tmp_path / "projects/moved-project"
     _write_executable(
