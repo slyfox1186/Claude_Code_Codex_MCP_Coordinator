@@ -31,6 +31,7 @@ from agent_duet.server import (
     _status_with_liveness,
     _worker_vanished,
     create_run,
+    doctor,
     duet_wait,
 )
 from agent_duet.state import StateError, StateStore
@@ -51,6 +52,63 @@ def start(config, store, repo, **kwargs):
 
 def run_worker(config, store, run_id) -> None:
     asyncio.run(Worker(config=config, store=store, run_id=run_id).execute())
+
+
+# ---------------------------------------------------------------------------
+# Defect: a moved or deleted project made a healthy installation look broken
+# ---------------------------------------------------------------------------
+
+
+def test_doctor_reports_a_missing_registered_project_as_a_warning(
+    config_file: Path, repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    shutil.rmtree(repo)
+
+    result = doctor(config_file)
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert f"repo {repo}: MISSING" in output
+    assert f"./setup.sh remove-repo {repo}" in output
+    assert "result: OK (2 warning(s))" in output
+
+
+def test_doctor_rejects_a_registered_project_replaced_by_a_file(
+    config_file: Path, repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    shutil.rmtree(repo)
+    repo.write_text("not a directory\n")
+
+    result = doctor(config_file)
+
+    output = capsys.readouterr().out
+    assert result == 1
+    assert f"registered project path is not a directory: {repo}" in output
+    assert "result: 1 problem(s), 1 warning(s)" in output
+
+
+def test_doctor_rejects_a_registered_project_it_cannot_inspect(
+    config_file: Path,
+    repo: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_stat = Path.stat
+
+    def deny_registered_project(path: Path, *args, **kwargs):
+        if path == repo:
+            raise PermissionError("inspection denied")
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", deny_registered_project)
+
+    result = doctor(config_file)
+
+    output = capsys.readouterr().out
+    assert result == 1
+    assert f"could not inspect registered project path {repo}" in output
+    assert "inspection denied" in output
+    assert "result: 1 problem(s), 1 warning(s)" in output
 
 
 # ---------------------------------------------------------------------------

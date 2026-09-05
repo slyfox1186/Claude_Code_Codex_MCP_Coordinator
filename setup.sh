@@ -832,11 +832,17 @@ PY
 
 do_check() {
   local failed=0
+  local warning_report=""
   step "Is agent-duet healthy?"
   local report
   if report="$(agent-duet doctor 2>&1)"; then
     ok "healthy"
     note "$(printf '%s' "$report" | grep -c '^  repo ') project(s) registered"
+    warning_report="$(printf '%s\n' "$report" | grep '^    WARNING:' || true)"
+    if [ -n "$warning_report" ]; then
+      warn "configuration warning(s):"
+      printf '%s\n' "$warning_report" | sed 's/^/      /'
+    fi
   else
     warn "doctor reported a problem:"
     printf '%s\n' "$report" | sed 's/^/      /'
@@ -866,7 +872,11 @@ do_check() {
   done
 
   if [ "$failed" -eq 0 ]; then
-    printf '\n%sEverything works.%s\n\n' "$G$B" "$N"
+    if [ -n "$warning_report" ]; then
+      printf '\n%sAgent Duet works. Review the warning(s) above.%s\n\n' "$G$B" "$N"
+    else
+      printf '\n%sEverything works.%s\n\n' "$G$B" "$N"
+    fi
   else
     printf '\n%sSomething is off. Run ./setup.sh to repair it.%s\n\n' "$Y" "$N"
     return 1

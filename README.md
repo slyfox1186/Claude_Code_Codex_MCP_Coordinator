@@ -126,6 +126,10 @@ it completes with a local commit. Say nothing and nothing happens.
 ./setup.sh uninstall
 ```
 
+If a registered project was moved or deleted, `check` reports that path as a warning
+instead of claiming Agent Duet is broken. Restore the folder, or remove the stale entry
+with `./setup.sh remove-repo /old/project/path`.
+
 Project registration allows the project's parent directory, detects its test suite
 (pytest, `npm test`, `cargo test`, `go test`), and writes the config entry between
 markers so `remove-repo` takes it back out cleanly. If the folder has no Git history,

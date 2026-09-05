@@ -15,7 +15,9 @@ import contextlib
 import json
 import logging
 import os
+import shlex
 import socket
+import stat
 import subprocess
 import sys
 import uuid
@@ -1235,6 +1237,7 @@ def doctor(config_path: Path | None = None) -> int:
     """Print a health report to stdout. Never prints credentials. CLI only."""
     lines: list[str] = [f"agent-duet {__version__}", f"python {sys.version.split()[0]}"]
     problems = 0
+    warnings = 0
     try:
         config = load_config(config_path)
     except ConfigError as exc:
@@ -1292,13 +1295,38 @@ def doctor(config_path: Path | None = None) -> int:
 
     lines.append(f"allowed repo roots: {config.allowed_repo_roots}")
     for repo in config.repositories:
-        exists = Path(repo.path).is_dir()
+        repo_path = Path(repo.path)
+        detail: str | None = None
+        missing = False
+        try:
+            repo_mode = repo_path.stat().st_mode
+        except FileNotFoundError:
+            status = "MISSING"
+            missing = True
+        except OSError as exc:
+            status = "UNREADABLE"
+            detail = f"could not inspect registered project path {repo.path}: {exc}"
+            problems += 1
+        else:
+            if stat.S_ISDIR(repo_mode):
+                status = "present"
+            else:
+                status = "NOT A DIRECTORY"
+                detail = f"registered project path is not a directory: {repo.path}"
+                problems += 1
         lines.append(
-            f"  repo {repo.path}: {'present' if exists else 'MISSING'}, "
+            f"  repo {repo.path}: {status}, "
             f"{len(repo.validation_commands)} validation command(s)"
         )
-        if not exists:
-            problems += 1
+        if missing:
+            warnings += 1
+            lines.append(
+                "    WARNING: registered project directory is missing: "
+                f"{repo.path}. Restore it, or from the Agent Duet checkout run: "
+                f"./setup.sh remove-repo {shlex.quote(repo.path)}"
+            )
+        elif detail:
+            lines.append(f"    ERROR: {detail}")
         if not repo.validation_commands:
             # Not a failure -- a repo may genuinely have no suite -- but it must be
             # stated. With no command, FINAL_VALIDATING has nothing to run, so the
@@ -1307,12 +1335,21 @@ def doctor(config_path: Path | None = None) -> int:
                 "    WARNING: no validation_commands, so nothing independent checks "
                 "this repository's runs. Both agents' claims go unverified."
             )
+            warnings += 1
     lines.append(
         f"deployment: {'enabled' if config.deployment.enabled else 'disabled'}, "
         f"{len(config.deployment.profiles)} profile(s)"
     )
     lines.append(f"checked at: {datetime.now(UTC).isoformat(timespec='seconds')}")
-    lines.append(f"result: {'OK' if problems == 0 else f'{problems} problem(s)'}")
+    if problems:
+        result = f"{problems} problem(s)"
+        if warnings:
+            result += f", {warnings} warning(s)"
+    elif warnings:
+        result = f"OK ({warnings} warning(s))"
+    else:
+        result = "OK"
+    lines.append(f"result: {result}")
     print("\n".join(lines))
     return 0 if problems == 0 else 1
 

@@ -181,9 +181,10 @@ so shorter polling never shortens model work.
 ./setup.sh check
 ```
 
-Every line is a `✓`, ending in `Everything works.` It verifies `agent-duet doctor`, that
-Claude Code reports `Connected`, that Codex reports all five tools, and that both `/duet`
-files exist.
+It verifies `agent-duet doctor`, that Claude Code reports `Connected`, that Codex reports
+all five tools, and that both `/duet` files exist. A healthy configuration ends in
+`Everything works.` A project that was moved or deleted is an actionable warning, not an
+installation failure: restore it or run `./setup.sh remove-repo /old/project/path`.
 
 Then start each CLI interactively and run `/mcp`. Both must show `agent_duet` with exactly
 five tools: `duet_start`, `duet_status`, `duet_wait`, `duet_cancel`, `duet_finalize`.

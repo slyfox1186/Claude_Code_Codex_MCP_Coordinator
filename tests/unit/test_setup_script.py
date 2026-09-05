@@ -864,6 +864,51 @@ def test_guided_setup_runs_health_check_before_finishing(tmp_path: Path) -> None
     )
 
 
+def test_health_check_surfaces_missing_project_warning_without_failing(tmp_path: Path) -> None:
+    home, env = _fake_install_environment(tmp_path)
+    fake_agent_duet = tmp_path / "bin/agent-duet"
+    missing_project = tmp_path / "projects/moved-project"
+    _write_executable(
+        fake_agent_duet,
+        f"""#!/usr/bin/env bash
+if [[ "$1" == "doctor" ]]; then
+    echo "agent-duet 1.0.0"
+    echo "  repo {missing_project}: MISSING, 1 validation command(s)"
+    echo "    WARNING: registered project directory is missing: {missing_project}. Restore it, or run: ./setup.sh remove-repo {missing_project}"
+    echo "result: OK (1 warning(s))"
+    exit 0
+fi
+""",
+    )
+    codex_home = home / ".codex"
+    claude_commands = home / ".claude/commands"
+    codex_home.joinpath("prompts").mkdir(parents=True)
+    claude_commands.mkdir(parents=True)
+    codex_home.joinpath("prompts/duet.md").write_text("installed")
+    claude_commands.joinpath("duet.md").write_text("installed")
+    codex_home.joinpath("config.toml").write_text(
+        f'''[mcp_servers.agent_duet]
+command = "{fake_agent_duet}"
+tool_timeout_sec = 120
+enabled_tools = ["duet_start", "duet_status", "duet_wait", "duet_cancel", "duet_finalize"]
+'''
+    )
+
+    result = subprocess.run(
+        ["bash", str(PROJECT_ROOT / "setup.sh"), "check"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert f"registered project directory is missing: {missing_project}" in result.stdout
+    assert "Agent Duet works. Review the warning(s) above." in result.stdout
+    assert "Something is off" not in result.stdout
+
+
 def test_failed_health_check_does_not_report_setup_complete(tmp_path: Path) -> None:
     home, _, _, _, env = _guided_setup_environment(tmp_path)
     _write_executable(

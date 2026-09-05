@@ -110,6 +110,8 @@ you to merge. A dirty tree alone never selects or suggests this mode.
 ```
 
 Tells you in plain English. If something is broken, `./setup.sh install` repairs it.
+If only a registered project path is missing, setup remains healthy and tells you to
+restore the folder or unregister it with `./setup.sh remove-repo /old/project/path`.
 
 ---
 
