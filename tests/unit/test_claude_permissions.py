@@ -96,6 +96,8 @@ def test_install_preserves_existing_data_mode_and_is_idempotent(tmp_path: Path) 
         '{"permissions": []}\n',
         '{"permissions": {"allow": "mcp__agent_duet__duet_wait"}}\n',
         '{"permissions": {"allow": ["Read", 7]}}\n',
+        '{"permissions": {"ask": "mcp__agent_duet__duet_wait"}}\n',
+        '{"permissions": {"deny": ["Read", 7]}}\n',
     ],
 )
 def test_install_refuses_invalid_settings_without_changing_them(

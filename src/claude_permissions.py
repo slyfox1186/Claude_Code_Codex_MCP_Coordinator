@@ -268,6 +268,8 @@ def install_permissions(path: Path) -> bool:
     with _exclusive_settings_lock(path):
         for _ in range(MAX_UPDATE_ATTEMPTS):
             data, snapshot, mode = _load_settings(path)
+            _allow_list(data, create=False)
+            _higher_precedence_conflicts(data)
             allow = _allow_list(data, create=True)
             assert allow is not None
             missing = [rule for rule in REQUIRED_POLL_PERMISSIONS if rule not in allow]
@@ -287,15 +289,11 @@ def _matches_permission_rule(rule: str, tool: str) -> bool:
     return re.fullmatch(expression, tool) is not None
 
 
-def _permission_problems(data: dict[str, Any]) -> tuple[list[str], list[str]]:
-    allow = _allow_list(data, create=False)
-    missing = [
-        rule for rule in REQUIRED_POLL_PERMISSIONS if allow is None or rule not in allow
-    ]
+def _higher_precedence_conflicts(data: dict[str, Any]) -> list[str]:
     conflicts: list[str] = []
     permissions = data.get("permissions")
     if not isinstance(permissions, dict):
-        return missing, conflicts
+        return conflicts
     for policy in ("deny", "ask"):
         rules = permissions.get(policy, [])
         if not isinstance(rules, list) or not all(isinstance(rule, str) for rule in rules):
@@ -310,6 +308,15 @@ def _permission_problems(data: dict[str, Any]) -> tuple[list[str], list[str]]:
                 conflicts.append(
                     f"permissions.{policy} rule {rule!r} matches {', '.join(matches)}"
                 )
+    return conflicts
+
+
+def _permission_problems(data: dict[str, Any]) -> tuple[list[str], list[str]]:
+    allow = _allow_list(data, create=False)
+    missing = [
+        rule for rule in REQUIRED_POLL_PERMISSIONS if allow is None or rule not in allow
+    ]
+    conflicts = _higher_precedence_conflicts(data)
     return missing, conflicts
 
 
@@ -333,6 +340,7 @@ def remove_permissions(path: Path) -> bool:
             if snapshot is None:
                 return False
             allow = _allow_list(data, create=False)
+            _higher_precedence_conflicts(data)
             if allow is None or not any(
                 rule in allow for rule in REQUIRED_POLL_PERMISSIONS
             ):

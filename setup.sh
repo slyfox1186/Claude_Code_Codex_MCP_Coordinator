@@ -1029,7 +1029,7 @@ do_check() {
 
   if [ "$failed" -eq 0 ]; then
     if [ -n "$warning_report" ]; then
-      printf '\n%sAgent Duet works. Review the warning(s) above.%s\n\n' "$G$B" "$N"
+      printf '\n%sInstallation checks passed with warning(s). Review them above.%s\n\n' "$G$B" "$N"
     else
       printf '\n%sInstallation checks passed.%s\n\n' "$G$B" "$N"
     fi

@@ -1289,7 +1289,7 @@ enabled_tools = ["duet_start", "duet_status", "duet_wait", "duet_cancel", "duet_
 
     assert result.returncode == 0, result.stdout
     assert f"registered project directory is missing: {missing_project}" in result.stdout
-    assert "Agent Duet works. Review the warning(s) above." in result.stdout
+    assert "Installation checks passed with warning(s). Review them above." in result.stdout
     assert "Something is off" not in result.stdout
 
 
