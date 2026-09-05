@@ -179,7 +179,7 @@ class Config(BaseModel):
 
     allowed_repo_roots: list[str] = Field(min_length=1)
     state_dir: str
-    max_parallel_global: int = Field(default=1, ge=1, le=16)
+    max_parallel_global: int = Field(default=2, ge=1, le=16)
     phase_timeout_seconds: int = Field(default=7200, ge=60, le=86_400)
     # Keep accepting the old 300-second setting so upgrades do not invalidate existing
     # config files. The server always applies FOREGROUND_WAIT_MAX_SECONDS as a hard cap.

@@ -70,6 +70,7 @@ def test_doctor_reports_a_missing_registered_project_as_a_warning(
 
     output = capsys.readouterr().out
     assert result == 0
+    assert "concurrency: 2 total, 1 per repository" in output
     assert f"repo {repo}: MISSING" in output
     assert f"./setup.sh remove-repo {repo}" in output
     assert "result: OK (2 warning(s))" in output
@@ -832,24 +833,62 @@ def test_the_recorded_digest_matches_the_archived_bytes(config, store, repo, fak
 
 
 # ---------------------------------------------------------------------------
-# Defect: max_parallel_global was parsed but never enforced
+# Concurrent projects share a bounded global pool, not one global mutex
 # ---------------------------------------------------------------------------
 
 
-def test_a_second_concurrent_run_is_refused(config, store, repo, work_root):
+def _create_parallel_test_repo(work_root: Path, name: str) -> Path:
+    path = work_root / name
+    path.mkdir()
+    git("init", "-q", "-b", "main", cwd=path)
+    git("config", "user.email", "t@t.t", cwd=path)
+    git("config", "user.name", "t", cwd=path)
+    (path / "README.md").write_text(f"# {name}\n")
+    git("add", "README.md", cwd=path)
+    git("commit", "-q", "-m", "initial", cwd=path)
+    return path
+
+
+def test_default_allows_two_projects_and_refuses_a_third(config, store, repo, work_root):
+    second = _create_parallel_test_repo(work_root, "second")
+    third = _create_parallel_test_repo(work_root, "third")
+
+    first_run = start(config, store, repo)
+    second_run = start(config, store, second)
+
+    assert first_run.repo_path == str(repo)
+    assert second_run.repo_path == str(second)
+    with pytest.raises(ToolError, match="max_parallel_global is 2"):
+        start(config, store, third)
+
+
+def test_global_capacity_reaps_a_crashed_run_from_another_project(
+    config, store, repo, work_root
+):
+    second = _create_parallel_test_repo(work_root, "second")
+    third = _create_parallel_test_repo(work_root, "third")
+
+    crashed = start(config, store, repo)
+    store.transition(crashed.run_id, Phase.CLAUDE_IMPLEMENTING)
+    store.update(crashed.run_id, worker_pid=999_999_999, worker_start_ticks="123")
+    start(config, store, second)
+
+    third_run = start(config, store, third)
+
+    assert third_run.repo_path == str(third)
+    assert store.get(crashed.run_id).phase is Phase.FAILED
+
+
+def test_an_explicit_global_limit_of_one_refuses_a_second_project(
+    config, store, repo, work_root
+):
     from agent_duet.server import RUNTIME, ToolError, duet_start
 
-    other = work_root / "second"
-    other.mkdir()
-    git("init", "-q", "-b", "main", cwd=other)
-    git("config", "user.email", "t@t.t", cwd=other)
-    git("config", "user.name", "t", cwd=other)
-    (other / "README.md").write_text("# second\n")
-    git("add", "README.md", cwd=other)
-    git("commit", "-q", "-m", "initial", cwd=other)
+    configured = config.model_copy(update={"max_parallel_global": 1})
+    other = _create_parallel_test_repo(work_root, "second")
 
-    start(config, store, repo)  # occupies the single global slot
-    RUNTIME._config, RUNTIME._store = config, store
+    start(configured, store, repo)
+    RUNTIME._config, RUNTIME._store = configured, store
     try:
         with pytest.raises(ToolError, match="max_parallel_global"):
             asyncio.run(
@@ -861,6 +900,15 @@ def test_a_second_concurrent_run_is_refused(config, store, repo, work_root):
             )
     finally:
         RUNTIME.reset()
+
+
+def test_same_repository_still_allows_only_one_active_run(config, store, repo):
+    start(config, store, repo)
+
+    with pytest.raises(ToolError, match="a run is already active") as caught:
+        start(config, store, repo, task="duplicate work")
+
+    assert "max_parallel_global" not in str(caught.value)
 
 
 # ---------------------------------------------------------------------------

@@ -468,6 +468,7 @@ def test_blank_repository_path_skips_registration(tmp_path: Path) -> None:
     assert "No project registered" in result.stdout
     assert "./setup.sh add-repo /path/to/your/project" in result.stdout
     config = (home / ".config/agent-duet/config.toml").read_text()
+    assert "max_parallel_global = 2" in config
     assert "\n[[repositories]]\n" not in config
 
 

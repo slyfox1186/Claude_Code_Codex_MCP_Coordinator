@@ -97,6 +97,75 @@ def test_null_idempotency_keys_do_not_collide(store, tmp_path):
     assert len(store.all_runs()) == 2
 
 
+def test_concurrent_reservations_never_exceed_the_global_limit(store, tmp_path):
+    barrier = threading.Barrier(3)
+    accepted: list[str] = []
+    refused: list[Exception] = []
+    result_lock = threading.Lock()
+
+    def reserve(index: int) -> None:
+        local_store = StateStore(store.db_path)
+        record = make_record(
+            tmp_path,
+            run_id=f"00000000-0000-4000-8000-{index:012d}",
+        )
+        record.repo_path = str(tmp_path / f"repo-{index}")
+        barrier.wait()
+        try:
+            local_store.create_run(record, max_parallel_global=2)
+        except Exception as exc:
+            with result_lock:
+                refused.append(exc)
+        else:
+            with result_lock:
+                accepted.append(record.run_id)
+
+    threads = [threading.Thread(target=reserve, args=(index,)) for index in range(1, 4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(accepted) == 2
+    assert len(refused) == 1
+    assert isinstance(refused[0], StateError)
+    assert "max_parallel_global is 2" in str(refused[0])
+
+
+def test_concurrent_reservations_allow_only_one_run_per_repository(store, tmp_path):
+    barrier = threading.Barrier(2)
+    accepted: list[str] = []
+    refused: list[Exception] = []
+    result_lock = threading.Lock()
+
+    def reserve(index: int) -> None:
+        local_store = StateStore(store.db_path)
+        record = make_record(
+            tmp_path,
+            run_id=f"00000000-0000-4000-8000-{index:012d}",
+        )
+        barrier.wait()
+        try:
+            local_store.create_run(record, max_parallel_global=4)
+        except Exception as exc:
+            with result_lock:
+                refused.append(exc)
+        else:
+            with result_lock:
+                accepted.append(record.run_id)
+
+    threads = [threading.Thread(target=reserve, args=(index,)) for index in range(1, 3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(accepted) == 1
+    assert len(refused) == 1
+    assert isinstance(refused[0], StateError)
+    assert "a run is already active" in str(refused[0])
+
+
 def test_evidence_merges_rather_than_replaces(store, tmp_path):
     record = store.create_run(make_record(tmp_path))
     store.merge_evidence(record.run_id, {"a": 1})

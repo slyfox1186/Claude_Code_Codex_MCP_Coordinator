@@ -58,6 +58,9 @@ a reason to keep polling.
 `CLEANUP_REQUIRED` means the run stopped but a worker or child process remains; retry
 `duet_cancel` before starting another run.
 
+You may start `/duet` in a second registered project while the first runs. The default
+allows two projects at once but still refuses a second active run in the same repository.
+
 Then it **stops** and tells you what it did.
 
 > If it commits anything without asking you first, that is a bug. Tell me.
@@ -140,7 +143,7 @@ output to me as-is.
 | Fails right away at `CLAUDE_IMPLEMENTING` | run `claude` on its own once and sign in |
 | Fails at `CODEX_REVIEWING` | run `codex` on its own once and sign in |
 | `not below an allowed_repo_roots entry` | run `./setup.sh add-repo <the project>` |
-| `already active ... max_parallel_global is 1` | it names the run; `agent-duet cancel <run-id>` frees the slot |
+| `already active ... max_parallel_global is N` | all global slots are occupied; wait, finalize, cancel, or raise the configured limit |
 | `refusing an in-place run ... dirty working tree` | commit or stash first, then retry on the same branch |
 | Refuses to finalize | read the reason it gives; something changed after the tests ran |
 

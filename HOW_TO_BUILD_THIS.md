@@ -222,6 +222,10 @@ agents finish. They are command **vectors**, never shell strings, and they are r
 from this config file — never from task text or from a file inside the repository under
 test. Edit them by hand whenever the detected default is not what you want.
 
+New configurations set `max_parallel_global = 2`: two different repositories can run at
+once, while the server still refuses a duplicate run in one repository. Operators may set
+the global value from 1 through 16. Setup preserves an existing explicit value on upgrade.
+
 ---
 
 ## 6. Prove it end to end on a disposable repository

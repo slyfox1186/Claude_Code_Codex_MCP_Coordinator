@@ -139,6 +139,12 @@ Project registration allows the project's parent directory, detects its test sui
 markers so `remove-repo` takes it back out cleanly. If the folder has no Git history,
 setup automatically creates the same local-only baseline used by `-d`.
 
+Two different projects can run concurrently by default. A project still gets only one
+active run, preventing two agent pairs from editing the same checkout. Adjust
+`max_parallel_global` from 1 through 16 in `~/.config/agent-duet/config.toml` if your
+machine or provider limits call for a different total. Existing explicit settings are
+preserved during upgrades.
+
 ---
 
 ## Where the work ends up
@@ -250,7 +256,7 @@ agent-duet logs        # the most recent run, in full
 | Fails immediately at `CLAUDE_IMPLEMENTING` | run `claude` on its own once and sign in |
 | Fails at `CODEX_REVIEWING` | run `codex` on its own once and sign in |
 | `not below an allowed_repo_roots entry` | `./setup.sh add-repo <the project>` |
-| `already active ... max_parallel_global is 1` | it names the run; `agent-duet cancel <run-id>` frees the slot |
+| `already active ... max_parallel_global is N` | all global slots are occupied; wait, finalize, cancel, or raise the configured limit |
 | `refusing an in-place run ... dirty working tree` | commit or stash, then retry on the same branch |
 | Refuses to finalize | read the reason; something changed after the tests ran |
 
@@ -269,8 +275,8 @@ agent-duet gc --older-than 30 --apply
 
 `cancel` accepts an id prefix. It exists because a run parked at `AWAITING_FINALIZE` has
 no live worker and is never reaped — it is waiting for a person — yet it still counts as
-active, so with the default `max_parallel_global = 1` it blocks every new run until
-someone finalizes or cancels it.
+active, so with the default `max_parallel_global = 2` it occupies one of the two global
+slots until someone finalizes or cancels it.
 
 `gc` forgets a terminal run completely: its artifact directories, git's worktree
 registration in the real repository, and its row in the listing. It never deletes a run's

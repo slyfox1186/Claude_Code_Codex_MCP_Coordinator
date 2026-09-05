@@ -38,6 +38,9 @@ Check the finished installation:
 Close and reopen any Claude Code or Codex sessions that were already running during
 setup. Open clients retain the old MCP process and `/duet` instructions loaded at startup.
 
+New installations allow two different projects to run concurrently. Change
+`max_parallel_global` in `~/.config/agent-duet/config.toml` to select 1 through 16.
+
 Requirements: Linux and Git. Without Conda, the server also needs Python 3.13 or newer.
 `curl` or `wget` is needed only when a provider CLI must be downloaded.
 

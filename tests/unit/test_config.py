@@ -34,6 +34,7 @@ def base_body(work_root: Path, state: Path) -> str:
 def test_valid_config_loads(tmp_path, work_root):
     path = write(tmp_path, base_body(work_root, tmp_path / "state"))
     config = load_config(path)
+    assert config.max_parallel_global == 2
     assert config.claude_path.is_file()
     assert config.codex_path.is_file()
     assert config.source_path == path

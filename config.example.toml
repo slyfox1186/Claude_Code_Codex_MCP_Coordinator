@@ -13,7 +13,9 @@ allowed_repo_roots = ["/home/REPLACE_ME/work"]
 
 state_dir = "/home/REPLACE_ME/.local/state/agent-duet"
 
-max_parallel_global = 1
+# Two different repositories may run at once by default. One repository still has
+# exactly one active run. Set this from 1 through 16 for your machine and provider limits.
+max_parallel_global = 2
 # Safety ceiling for each Claude/Codex phase. This is separate from status polling.
 phase_timeout_seconds = 7200
 # Keep one long-poll below Claude Code's two-minute MCP auto-background threshold.

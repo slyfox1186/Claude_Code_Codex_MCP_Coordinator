@@ -171,33 +171,17 @@ def create_run(config: Config, store: StateStore, request: StartRequest) -> RunR
     """
     info = _validate_repo_for_start(config, request)
 
-    reaped = _reap_dead_runs(store, str(info.path))
+    active_repo_paths = {record.repo_path for record in store.active_runs()}
+    active_repo_paths.add(str(info.path))
+    reaped = [
+        run_id
+        for repo_path in sorted(active_repo_paths)
+        for run_id in _reap_dead_runs(store, repo_path)
+    ]
     if reaped:
-        logger.info("duet_start: reaped %d crashed run(s) for %s", len(reaped), info.path)
-    global_active = store.active_runs()
-    if len(global_active) >= config.max_parallel_global:
-        # Name them. Without this the caller has to go digging in sqlite to find out
-        # what is holding the slot, which is exactly what the limit should tell them.
-        blocking = "; ".join(
-            f"{record.run_id} is {record.phase.value} on {record.repo_path}"
-            for record in global_active
-        )
-        waiting = [r for r in global_active if r.phase is Phase.AWAITING_FINALIZE]
-        advice = (
-            f"call duet_finalize or duet_cancel on {waiting[0].run_id} -- it is waiting "
-            "on you and will not advance by itself"
-            if waiting
-            else "wait for it to finish, or call duet_cancel on it"
-        )
-        raise _fail(
-            f"cannot start: {len(global_active)} run(s) already active and "
-            f"max_parallel_global is {config.max_parallel_global}. Active: {blocking}. "
-            f"To proceed, {advice}."
-        )
-    if store.active_runs(str(info.path)):
-        raise _fail(
-            f"a run is already active for {info.path}; call duet_status on it instead of "
-            "starting a duplicate"
+        logger.info(
+            "duet_start: reaped %d crashed run(s) before reserving capacity",
+            len(reaped),
         )
     try:
         with repo_lock(config.locks_dir, info.git_common_dir):
@@ -245,8 +229,10 @@ def create_run(config: Config, store: StateStore, request: StartRequest) -> RunR
         codex_version=cli_version(config.codex_path),
     )
     try:
-        store.create_run(record)
+        store.create_run(record, max_parallel_global=config.max_parallel_global)
     except StateError as exc:
+        with contextlib.suppress(OSError):
+            run_dir.rmdir()
         raise _fail(str(exc)) from exc
 
     return record
@@ -1457,6 +1443,9 @@ def doctor(config_path: Path | None = None) -> int:
         f"child quality: claude effort={config.claude.effort}, "
         f"codex reasoning={config.codex.reasoning_effort}, "
         f"phase safety ceiling={config.phase_timeout_seconds}s"
+    )
+    lines.append(
+        f"concurrency: {config.max_parallel_global} total, 1 per repository"
     )
     lines.append(
         "status poll: "

@@ -335,13 +335,58 @@ class StateStore:
 
     # -- writes ------------------------------------------------------------
 
-    def create_run(self, record: RunRecord) -> RunRecord:
-        """Insert a new run row and its first event, atomically."""
+    def create_run(
+        self, record: RunRecord, *, max_parallel_global: int | None = None
+    ) -> RunRecord:
+        """Reserve capacity, then insert a run and its first event atomically."""
         now = utcnow()
         record.created_at = record.created_at or now
         record.updated_at = now
         try:
             with self.transaction() as conn:
+                if max_parallel_global is not None:
+                    if not 1 <= max_parallel_global <= 16:
+                        raise StateError("max_parallel_global must be between 1 and 16")
+                    active = [
+                        self._row_to_record(row)
+                        for row in conn.execute(
+                            "SELECT * FROM runs WHERE terminal = 0 ORDER BY created_at"
+                        ).fetchall()
+                    ]
+                    same_repo = [item for item in active if item.repo_path == record.repo_path]
+                    if same_repo:
+                        blocking_run = same_repo[0]
+                        if blocking_run.phase is Phase.AWAITING_FINALIZE:
+                            raise StateError(
+                                f"a run is already active for {record.repo_path}: "
+                                f"{blocking_run.run_id} is AWAITING_FINALIZE. Call "
+                                "duet_finalize or duet_cancel on it before starting "
+                                "another run."
+                            )
+                        raise StateError(
+                            f"a run is already active for {record.repo_path}; call "
+                            f"duet_status on {blocking_run.run_id} instead of starting "
+                            "a duplicate"
+                        )
+                    if len(active) >= max_parallel_global:
+                        blocking_summary = "; ".join(
+                            f"{item.run_id} is {item.phase.value} on {item.repo_path}"
+                            for item in active
+                        )
+                        waiting = [
+                            item for item in active if item.phase is Phase.AWAITING_FINALIZE
+                        ]
+                        advice = (
+                            f"call duet_finalize or duet_cancel on {waiting[0].run_id} -- "
+                            "it is waiting on you and will not advance by itself"
+                            if waiting
+                            else "wait for a run to finish, or call duet_cancel on one"
+                        )
+                        raise StateError(
+                            f"cannot start: {len(active)} run(s) already active and "
+                            f"max_parallel_global is {max_parallel_global}. Active: "
+                            f"{blocking_summary}. To proceed, {advice}."
+                        )
                 conn.execute(
                     """
                     INSERT INTO runs (
