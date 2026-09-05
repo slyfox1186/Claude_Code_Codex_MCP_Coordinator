@@ -1474,3 +1474,22 @@ def test_documentation_leads_with_short_guided_install_and_consent_disclosure() 
         assert "pytest" in document.lower()
 
     assert readme.index("## Install") < readme.index("## Installing by hand")
+
+
+def test_documentation_explains_claude_polling_permission_boundary() -> None:
+    documents = {
+        name: (PROJECT_ROOT / name).read_text()
+        for name in ("README.md", "INSTALL.md", "HOW_TO_BUILD_THIS.md", "HOW_TO_TEST.md")
+    }
+
+    for name, text in documents.items():
+        assert "read-only" in text.lower(), name
+        assert "mcp__agent_duet__duet_status" in text, name
+        assert "mcp__agent_duet__duet_wait" in text, name
+        assert "Denied by auto mode classifier" in text, name
+        assert "./setup.sh install" in text, name
+        assert "/permissions" in text, name
+
+    manual_setup = documents["README.md"].split("## Installing by hand", 1)[1]
+    assert '"mcp__agent_duet__duet_status"' in manual_setup
+    assert '"mcp__agent_duet__duet_wait"' in manual_setup

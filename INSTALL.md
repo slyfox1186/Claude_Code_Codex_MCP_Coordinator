@@ -22,6 +22,9 @@ The first dependency install can take a few minutes. Setup keeps the download pr
 - If Claude Code or Codex is missing, setup offers their official installer and waits for `y`.
   Before asking, it shows the expected user-local files. These installers manage their own
   updates, and Codex may add its bin directory to your shell profile's `PATH`.
+- Setup adds the exact read-only Claude Code rules `mcp__agent_duet__duet_status` and
+  `mcp__agent_duet__duet_wait`. It does not preapprove the tools that start, cancel,
+  finalize, commit, or push a run.
 - `-d` or `--directory` accepts a relative path, full path, `~/...`, or a trailing `/`
   and skips the demo and project-path questions.
 - For a Python project with tests, setup creates a separate project validation environment
@@ -60,6 +63,7 @@ ready. If sign-in was skipped, run the command setup printed. For deeper diagnos
 | Python is older than 3.13 and Conda is absent | Install Python 3.13+, then rerun `./setup.sh` |
 | Signing in over SSH/headless | Run `codex login --device-auth` |
 | Python validation reports a missing import | Rerun `./setup.sh add-repo /path/to/project` and consent to refreshing its isolated dependencies |
+| `Denied by auto mode classifier` while polling | Run `./setup.sh install` from the Agent Duet checkout, or add `mcp__agent_duet__duet_status` and `mcp__agent_duet__duet_wait` through Claude Code's `/permissions` |
 | A check fails | Run `agent-duet doctor` for the detailed reason |
 
 Agent sessions receive broad access to your machine. Read [SECURITY.md](SECURITY.md) before use.

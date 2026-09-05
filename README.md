@@ -87,6 +87,12 @@ needed only if a provider CLI must be downloaded. See **[INSTALL.md](INSTALL.md)
 Setup never uses `sudo`. It validates generated configuration, backs up files it replaces
 to `<name>.duet-backup`, and is safe to rerun.
 
+Setup merges only `mcp__agent_duet__duet_status` and
+`mcp__agent_duet__duet_wait` into Claude Code's user allow rules. Those two tools only
+read run state. `duet_start`, `duet_cancel`, and `duet_finalize` keep Claude Code's normal
+permission checks, so installation does not preapprove starting, stopping, committing, or
+pushing work.
+
 After setup or an upgrade, close and reopen any Claude Code or Codex sessions that were
 already running. An open client keeps the MCP process and `/duet` instructions it loaded
 at startup; continuing in it can show stale or unverifiable progress.
@@ -277,6 +283,7 @@ agent-duet logs        # the most recent run, in full
 | `not below an allowed_repo_roots entry` | `./setup.sh add-repo <the project>` |
 | `already active ... max_parallel_global is N` | all global slots are occupied; wait, finalize, cancel, or raise the configured limit |
 | `refusing an in-place run ... dirty working tree` | commit or stash, then retry on the same branch |
+| `Denied by auto mode classifier` while polling | from this checkout, run `./setup.sh install`, or add `mcp__agent_duet__duet_status` and `mcp__agent_duet__duet_wait` through Claude Code's `/permissions`; then retry the poll |
 | Validation fails twice | run `agent-duet logs <run-id>`; both command results and output tails are preserved |
 | Refuses to finalize | read the reason; something changed after the tests ran |
 
@@ -337,10 +344,27 @@ claude mcp add-json --scope user agent_duet \
 codex mcp add agent_duet -- <path>
 ```
 
-Then add `tool_timeout_sec = 120` and `enabled_tools` to the `[mcp_servers.agent_duet]`
-table Codex wrote. `duet_wait` returns within 90 seconds so it stays below Claude Code's
-two-minute MCP auto-background threshold. Copy `commands/duet.md` into
-`~/.claude/commands/` and `~/.codex/prompts/`.
+Merge these two exact read-only rules into `permissions.allow` in Claude Code's user
+settings; do not replace unrelated settings and do not allow `mcp__agent_duet__*`:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "mcp__agent_duet__duet_status",
+      "mcp__agent_duet__duet_wait"
+    ]
+  }
+}
+```
+
+Use `/permissions` when changing the rules interactively. Then add
+`tool_timeout_sec = 120` and `enabled_tools` to the `[mcp_servers.agent_duet]` table Codex
+wrote. `duet_wait` returns within 90 seconds so it stays below Claude Code's two-minute
+MCP auto-background threshold. Copy `commands/duet.md` into `~/.claude/commands/` and
+`~/.codex/prompts/`. If an older manual installation reports
+`Denied by auto mode classifier`, run `./setup.sh install` or add the same two rules
+through `/permissions`.
 
 ---
 

@@ -16,6 +16,10 @@ skips the demo and project-path questions. The script writes your config, regist
 agent-duet with both Claude Code and Codex, installs the `/duet` command, and registers
 the selected project.
 
+For reliable polling in auto mode, it adds only the exact read-only rules
+`mcp__agent_duet__duet_status` and `mcp__agent_duet__duet_wait` to Claude Code. The tools
+that start, cancel, finalize, commit, or push are not preapproved.
+
 Without `-d`/`--directory`, setup offers a throwaway demo and then asks for a relative or
 full project path. A plain folder is accepted: setup automatically initializes local Git
 history from non-ignored files without adding a remote or uploading anything.
@@ -160,6 +164,7 @@ output to me as-is.
 | `not below an allowed_repo_roots entry` | run `./setup.sh add-repo <the project>` |
 | `already active ... max_parallel_global is N` | all global slots are occupied; wait, finalize, cancel, or raise the configured limit |
 | `refusing an in-place run ... dirty working tree` | commit or stash first, then retry on the same branch |
+| `Denied by auto mode classifier` while polling | run `./setup.sh install` from the Agent Duet checkout, or add `mcp__agent_duet__duet_status` and `mcp__agent_duet__duet_wait` through Claude Code's `/permissions` |
 | Validation fails twice | inspect both attempts with `agent-duet logs <run-id>`; do not publish the failed tree |
 | Refuses to finalize | read the reason it gives; something changed after the tests ran |
 
