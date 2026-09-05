@@ -98,6 +98,16 @@ Restate the final task and acceptance criteria in one short block before calling
    and stop. Never infer a phase, file change, or model activity from a spinner, elapsed
    time, earlier narrative, or repository inspection.
 
+   If `duet_wait` or the recovery `duet_status` returns `Denied by auto mode classifier`,
+   preserve and report the retained `run_id`, mark the current status stale/unverified,
+   and **Stop retrying**. Tell the operator to add both exact allow rules,
+   `mcp__agent_duet__duet_status` and `mcp__agent_duet__duet_wait`, through
+   `/permissions`, or to run `./setup.sh install` from the Agent Duet source checkout
+   outside this blocked session. Resume polling only after the operator reports that the
+   repair is complete. Do not edit `~/.claude/settings.json` from the model session.
+   Do not create `.claude/settings.local.json`. Do not inspect repository files or file
+   timestamps as a substitute for returned status evidence.
+
    Never report a raw phase enum by itself, and never say only "Still
    `CLAUDE_IMPLEMENTING`." Translate active model phases into meaningful progress:
 

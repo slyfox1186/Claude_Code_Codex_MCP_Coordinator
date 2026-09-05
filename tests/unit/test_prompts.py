@@ -192,6 +192,19 @@ def test_duet_command_requires_verified_matching_status_before_reporting_progres
     assert "retry `duet_cancel`" in text
 
 
+def test_duet_command_bounds_auto_mode_classifier_recovery():
+    text = (ROOT / "commands" / "duet.md").read_text()
+    assert "Denied by auto mode classifier" in text
+    assert "mcp__agent_duet__duet_status" in text
+    assert "mcp__agent_duet__duet_wait" in text
+    assert "`/permissions`" in text
+    assert "`./setup.sh install`" in text
+    assert "Do not edit `~/.claude/settings.json`" in text
+    assert "Do not create `.claude/settings.local.json`" in text
+    assert "Do not inspect repository files" in text
+    assert "Stop retrying" in text
+
+
 def test_duet_command_translates_internal_states_into_numbered_progress():
     text = (ROOT / "commands" / "duet.md").read_text()
     assert "Phase 1 of 3" in text
