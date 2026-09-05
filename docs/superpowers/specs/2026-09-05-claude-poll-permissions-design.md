@@ -31,13 +31,15 @@ polling rules solve the proven failure without weakening the publication boundar
 The settings update must preserve every unrelated key and permission rule, reject malformed
 or incorrectly typed JSON instead of replacing it, create a backup before changing an
 existing file, use an atomic same-directory replacement, preserve the existing file mode,
-and be idempotent. A newly created settings file is private to the user. Uninstall removes
-only the two Agent Duet rules and leaves the rest of the settings object unchanged.
+and be idempotent. Coordinate Agent Duet writers with a directory lock, compare the live
+file to the parsed byte snapshot before replacement, and retry from fresh state if another
+writer wins. A newly created settings file is private to the user. Uninstall removes only
+the two Agent Duet rules and leaves the rest of the settings object unchanged.
 
-`setup.sh check` validates the two exact user rules in addition to the MCP connection. If
-they are missing, it reports that polling can still be denied and directs the operator to
-rerun setup. Explicit `ask` or `deny` policy remains authoritative; the installer will not
-weaken user or managed boundaries.
+`setup.sh check` validates the two exact user rules in addition to the MCP connection. It
+fails on matching user-level `ask` or `deny` rules and directs the operator to
+`/permissions`; it does not remove them. Project and managed policy remains authoritative
+and is explicitly outside what a user-settings file check can prove.
 
 ## Recovery and documentation
 
@@ -57,7 +59,8 @@ the docs do not rely on that behavior for installation correctness.
 
 Black-box installer tests use temporary homes and fake provider CLIs. They prove fresh-file
 creation, preservation of existing settings, idempotent repair, malformed/type-invalid JSON
-refusal without damage, missing-rule health failure, and uninstall cleanup. Prompt contract
-tests prohibit self-edit recovery and require the exact operator repair path. After focused
-red/green cycles, run full pytest, Ruff, mypy, Bash syntax, whitespace checks, an isolated
-installer smoke test, the real setup health check, and a live read-only status call.
+refusal without damage, concurrent-writer retry, higher-precedence conflict reporting,
+missing-rule health failure, and uninstall cleanup. Prompt contract tests prohibit
+self-edit recovery and require the exact operator repair path. After focused red/green
+cycles, run full pytest, Ruff, mypy, Bash syntax, whitespace checks, an isolated installer
+smoke test, the real setup health check, and a live read-only status call.

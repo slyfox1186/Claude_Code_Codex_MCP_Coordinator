@@ -6,6 +6,7 @@ import json
 import stat
 from pathlib import Path
 
+import agent_duet.claude_permissions as permissions_module
 import pytest
 from agent_duet.claude_permissions import (
     REQUIRED_POLL_PERMISSIONS,
@@ -88,6 +89,10 @@ def test_install_preserves_existing_data_mode_and_is_idempotent(tmp_path: Path) 
     [
         "{",
         "[]\n",
+        '{"value": NaN}\n',
+        '{"value": Infinity}\n',
+        '{"value": -Infinity}\n',
+        '{"value": 1e400}\n',
         '{"permissions": []}\n',
         '{"permissions": {"allow": "mcp__agent_duet__duet_wait"}}\n',
         '{"permissions": {"allow": ["Read", 7]}}\n',
@@ -121,6 +126,82 @@ def test_install_refuses_a_symlink_without_touching_its_target(tmp_path: Path) -
     assert settings.is_symlink()
 
 
+def test_install_reports_an_unusable_parent_as_a_settings_error(tmp_path: Path) -> None:
+    not_a_directory = tmp_path / "not-a-directory"
+    not_a_directory.write_text("occupied\n")
+
+    with pytest.raises(SettingsError, match="could not prepare Claude Code settings"):
+        install_permissions(not_a_directory / "settings.json")
+
+
+def test_install_retries_and_preserves_a_concurrent_settings_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"theme": "light"}) + "\n")
+    original_atomic_write = permissions_module._atomic_write
+    injected = False
+
+    def inject_change_before_first_write(*args: object, **kwargs: object) -> None:
+        nonlocal injected
+        if not injected:
+            settings.write_text(
+                json.dumps({"theme": "light", "spinnerTipsEnabled": False}) + "\n"
+            )
+            injected = True
+        original_atomic_write(*args, **kwargs)
+
+    monkeypatch.setattr(permissions_module, "_atomic_write", inject_change_before_first_write)
+
+    assert install_permissions(settings) is True
+    assert json.loads(settings.read_text()) == {
+        "theme": "light",
+        "spinnerTipsEnabled": False,
+        "permissions": {"allow": list(REQUIRED_POLL_PERMISSIONS)},
+    }
+
+
+def test_remove_retries_and_preserves_a_concurrent_settings_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = tmp_path / "settings.json"
+    settings.write_text(
+        json.dumps(
+            {
+                "theme": "light",
+                "permissions": {"allow": list(REQUIRED_POLL_PERMISSIONS)},
+            }
+        )
+        + "\n"
+    )
+    original_atomic_write = permissions_module._atomic_write
+    injected = False
+
+    def inject_change_before_first_write(*args: object, **kwargs: object) -> None:
+        nonlocal injected
+        if not injected:
+            settings.write_text(
+                json.dumps(
+                    {
+                        "theme": "light",
+                        "spinnerTipsEnabled": False,
+                        "permissions": {"allow": list(REQUIRED_POLL_PERMISSIONS)},
+                    }
+                )
+                + "\n"
+            )
+            injected = True
+        original_atomic_write(*args, **kwargs)
+
+    monkeypatch.setattr(permissions_module, "_atomic_write", inject_change_before_first_write)
+
+    assert remove_permissions(settings) is True
+    assert json.loads(settings.read_text()) == {
+        "theme": "light",
+        "spinnerTipsEnabled": False,
+    }
+
+
 def test_permissions_valid_distinguishes_missing_rules_from_invalid_json(tmp_path: Path) -> None:
     settings = tmp_path / "settings.json"
     assert permissions_valid(settings) is False
@@ -131,6 +212,39 @@ def test_permissions_valid_distinguishes_missing_rules_from_invalid_json(tmp_pat
     settings.write_text("not json\n")
     with pytest.raises(SettingsError):
         permissions_valid(settings)
+
+
+@pytest.mark.parametrize(
+    ("policy", "rule"),
+    [
+        ("ask", REQUIRED_POLL_PERMISSIONS[0]),
+        ("ask", "mcp__agent_duet__*"),
+        ("deny", REQUIRED_POLL_PERMISSIONS[1]),
+        ("deny", "mcp__agent_duet__*"),
+    ],
+)
+def test_permissions_valid_rejects_higher_precedence_polling_conflicts(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    policy: str,
+    rule: str,
+) -> None:
+    settings = tmp_path / "settings.json"
+    settings.write_text(
+        json.dumps(
+            {
+                "permissions": {
+                    "allow": list(REQUIRED_POLL_PERMISSIONS),
+                    policy: [rule],
+                }
+            }
+        )
+        + "\n"
+    )
+
+    assert permissions_valid(settings) is False
+    assert main(["check", str(settings)]) == 1
+    assert f"permissions.{policy}" in capsys.readouterr().err
 
 
 def test_remove_deletes_only_agent_duet_exact_rules(tmp_path: Path) -> None:

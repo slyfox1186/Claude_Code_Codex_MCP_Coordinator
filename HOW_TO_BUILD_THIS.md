@@ -138,10 +138,11 @@ cd "$DUET_REPO"
 
 **Checks**
 
-- pytest: **303 passed**, zero failures. The suite drives the real worker, the real state
-  machine, and real git operations; only the two model CLIs are stand-ins.
+- pytest: zero failures. The suite drives the real worker, the real state machine, and
+  real git operations; only the two model CLIs are stand-ins. The pass count grows with
+  regression coverage, so do not pin installation checks to an old number.
 - ruff: `All checks passed!`
-- mypy: `Success: no issues found in 14 source files`
+- mypy: `Success: no issues found` for every configured source file
 
 If pytest fails, stop and report the failing test names and their assertion output. A red
 suite means the install is not usable, not that the tests are wrong.
@@ -192,9 +193,11 @@ reported as `WORKER_MISSING`, not repeated indefinitely as an active phase.
 
 It verifies `agent-duet doctor`, that Claude Code reports `Connected`, that both exact
 Claude polling permissions are present, that Codex reports all five tools, and that both
-`/duet` files exist. A healthy configuration ends in `Everything works.` A project that
-was moved or deleted is an actionable warning, not an installation failure: restore it or
-run `./setup.sh remove-repo /old/project/path`.
+`/duet` files exist. A healthy configuration ends in `Installation checks passed.` The
+check also explains that higher-precedence project or managed permission policy remains
+authoritative and can be inspected through `/permissions`. A project that was moved or
+deleted is an actionable warning, not an installation failure: restore it or run
+`./setup.sh remove-repo /old/project/path`.
 
 Then start each CLI interactively and run `/mcp`. Both must show `agent_duet` with exactly
 five tools: `duet_start`, `duet_status`, `duet_wait`, `duet_cancel`, `duet_finalize`.

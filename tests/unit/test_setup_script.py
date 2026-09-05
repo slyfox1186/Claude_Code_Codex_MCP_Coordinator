@@ -1067,7 +1067,8 @@ def test_guided_setup_runs_health_check_before_finishing(tmp_path: Path) -> None
     result = _run_interactive_setup(cwd=tmp_path, env=env, answers="n\n\n")
 
     assert result.returncode == 0, result.stdout
-    assert "Everything works." in result.stdout
+    assert "Installation checks passed." in result.stdout
+    assert "Project and managed ask/deny rules remain authoritative" in result.stdout
     assert any(
         "agent-duet doctor" in line for line in python_log.read_text().splitlines()
     )
@@ -1187,6 +1188,38 @@ def test_check_fails_when_a_claude_poll_permission_is_missing(tmp_path: Path) ->
     assert result.returncode == 1, result.stdout
     assert "polling permissions are missing" in result.stdout
     assert "run ./setup.sh install" in result.stdout.lower()
+
+
+@pytest.mark.parametrize(
+    ("policy", "rule"),
+    [
+        ("ask", POLL_PERMISSIONS[0]),
+        ("deny", "mcp__agent_duet__*"),
+    ],
+)
+def test_check_fails_for_higher_precedence_claude_polling_rule(
+    tmp_path: Path, policy: str, rule: str
+) -> None:
+    home, _, _, _, env = _guided_setup_environment(tmp_path)
+    installed = _run_interactive_setup(cwd=tmp_path, env=env, answers="n\n\n")
+    assert installed.returncode == 0, installed.stdout
+    settings_path = home / ".claude/settings.json"
+    settings = json.loads(settings_path.read_text())
+    settings["permissions"][policy] = [rule]
+    settings_path.write_text(json.dumps(settings) + "\n")
+
+    result = subprocess.run(
+        ["bash", str(PROJECT_ROOT / "setup.sh"), "check"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 1, result.stdout
+    assert f"permissions.{policy}" in result.stdout
+    assert "Everything works." not in result.stdout
 
 
 def test_uninstall_removes_only_claude_poll_permissions(tmp_path: Path) -> None:
@@ -1493,3 +1526,5 @@ def test_documentation_explains_claude_polling_permission_boundary() -> None:
     manual_setup = documents["README.md"].split("## Installing by hand", 1)[1]
     assert '"mcp__agent_duet__duet_status"' in manual_setup
     assert '"mcp__agent_duet__duet_wait"' in manual_setup
+    assert "303 passed" not in documents["HOW_TO_BUILD_THIS.md"]
+    assert "14 source files" not in documents["HOW_TO_BUILD_THIS.md"]

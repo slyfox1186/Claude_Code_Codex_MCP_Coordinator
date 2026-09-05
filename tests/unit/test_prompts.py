@@ -194,6 +194,7 @@ def test_duet_command_requires_verified_matching_status_before_reporting_progres
 
 def test_duet_command_bounds_auto_mode_classifier_recovery():
     text = (ROOT / "commands" / "duet.md").read_text()
+    normalized = " ".join(text.split())
     assert "Denied by auto mode classifier" in text
     assert "mcp__agent_duet__duet_status" in text
     assert "mcp__agent_duet__duet_wait" in text
@@ -203,6 +204,7 @@ def test_duet_command_bounds_auto_mode_classifier_recovery():
     assert "Do not create `.claude/settings.local.json`" in text
     assert "Do not inspect repository files" in text
     assert "Stop retrying" in text
+    assert "errors for any reason other than an auto-mode classifier denial" in normalized
 
 
 def test_duet_command_translates_internal_states_into_numbered_progress():

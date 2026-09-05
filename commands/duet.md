@@ -92,11 +92,12 @@ Restate the final task and acceptance criteria in one short block before calling
 
    Treat only a successfully returned status object whose `run_id` exactly matches the
    retained `run_id` as evidence. Read `liveness.state`, `worker_alive`, and
-   `child_alive` before describing activity. If a wait errors, its background result is
-   lost, or it returns no matching status, make one `duet_status` recovery call. If that
-   call also fails to return a matching status, report the session as **stale/unverified**
-   and stop. Never infer a phase, file change, or model activity from a spinner, elapsed
-   time, earlier narrative, or repository inspection.
+   `child_alive` before describing activity. If a wait errors for any reason other than
+   an auto-mode classifier denial, its background result is lost, or it returns no
+   matching status, make one `duet_status` recovery call. If that call also fails to
+   return a matching status, report the session as **stale/unverified** and stop.
+   Never infer a phase, file change, or model activity from a spinner, elapsed time,
+   earlier narrative, or repository inspection.
 
    If `duet_wait` or the recovery `duet_status` returns `Denied by auto mode classifier`,
    preserve and report the retained `run_id`, mark the current status stale/unverified,

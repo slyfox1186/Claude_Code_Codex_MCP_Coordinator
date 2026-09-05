@@ -44,7 +44,8 @@ does not rewrite either file. Require malformed JSON, a non-object root,
 non-object `permissions`, and non-string `permissions.allow` entries to raise
 `SettingsError` without modifying or backing up the input. Test `permissions_valid(path)`
 before and after repair. Test `remove_permissions(path)` removes only the exact two rules
-and preserves every unrelated value.
+and preserves every unrelated value. Include non-finite JSON values, concurrent-writer
+retry, and exact/wildcard `ask` and `deny` conflicts.
 
 - [ ] **Step 2: Verify RED**
 
@@ -61,12 +62,15 @@ Expected: collection fails because `agent_duet.claude_permissions` does not exis
 Create `src/claude_permissions.py` with `SettingsError`, the exact permission tuple,
 `install_permissions`, `permissions_valid`, `remove_permissions`, and a `main()` accepting
 `install|check|remove SETTINGS_PATH`. Parse with `json.loads`; validate each traversed
-container explicitly. Serialize with `ensure_ascii=False`, two-space indentation, and one
-trailing newline. Before a changed existing file, use `shutil.copy2` to create
-`<settings>.duet-backup`. Write through `tempfile.mkstemp` in the same directory, flush and
-`fsync`, apply the old mode or `0o600`, replace with `os.replace`, and `fsync` the directory.
-Refuse symlinks and non-regular paths. Make `check` return one only for missing/invalid rules
-and make parse/type failures print a concise error and return two.
+container explicitly. Reject non-finite numbers. Serialize with `ensure_ascii=False`,
+two-space indentation, and one trailing newline. Lock the settings directory for Agent
+Duet writers, retain the parsed byte snapshot, write that exact snapshot to
+`<settings>.duet-backup`, and verify the live file still matches before replacement; retry
+from fresh state when it changed. Write through `tempfile.mkstemp` in the same directory,
+flush and `fsync`, apply the old mode or `0o600`, replace with `os.replace`, and `fsync` the
+directory. Refuse symlinks and non-regular paths. Make `check` return one for missing or
+higher-precedence user `ask`/`deny` conflicts and make parse/type failures print a concise
+error and return two.
 
 - [ ] **Step 4: Verify GREEN**
 

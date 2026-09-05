@@ -1001,16 +1001,17 @@ do_check() {
     warn "not connected — run ./setup.sh"; failed=1
   fi
 
-  step "Can Claude Code poll without auto-mode classifier approval?"
+  step "Are Claude Code's user polling rules usable?"
   PY="$(pick_python)"
   local permission_report
   if permission_report="$(
       "$PY" "$REPO_ROOT/src/claude_permissions.py" check "$CLAUDE_SETTINGS_FILE" 2>&1
   )"; then
-    ok "both exact read-only polling permissions are configured"
+    ok "both exact read-only user allow rules are configured without a user-level conflict"
+    note "Project and managed ask/deny rules remain authoritative; inspect effective rules with /permissions."
   else
     warn "$permission_report"
-    info "Run ./setup.sh install to repair only the Agent Duet installation."
+    info "Run ./setup.sh install for missing entries; resolve ask/deny policy through /permissions."
     failed=1
   fi
 
@@ -1030,7 +1031,7 @@ do_check() {
     if [ -n "$warning_report" ]; then
       printf '\n%sAgent Duet works. Review the warning(s) above.%s\n\n' "$G$B" "$N"
     else
-      printf '\n%sEverything works.%s\n\n' "$G$B" "$N"
+      printf '\n%sInstallation checks passed.%s\n\n' "$G$B" "$N"
     fi
   else
     printf '\n%sSomething is off. Run ./setup.sh to repair it.%s\n\n' "$Y" "$N"
