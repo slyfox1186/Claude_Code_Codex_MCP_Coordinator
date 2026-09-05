@@ -170,7 +170,7 @@ Worth confirming once, the first time:
 |---|---|---|
 | `duet_start` | Validates the repo, creates the run, spawns a detached worker, returns a `run_id` in seconds | No |
 | `duet_status` | Durable phase, timestamps, evidence, next action | No |
-| `duet_wait` | The same, after waiting up to 300 s for something to change | No |
+| `duet_wait` | The same, after one foreground-safe wait of at most 90 s | No |
 | `duet_cancel` | Sets the cancel flag and reaps the worker's process group | No |
 | `duet_finalize` | Commits, pushes, verifies the remote ref, runs a deployment verifier | **Yes** |
 
@@ -194,6 +194,11 @@ with a timestamp and a reason *before* the work that follows it happens.
 
 The run survives the client that started it — the worker is detached, so you can close the
 terminal, reopen either CLI, and pick up where you left off.
+
+Status polling does not limit model work. The shipped configuration gives each Claude or
+Codex phase a 7,200-second safety ceiling, runs Claude at `xhigh` effort and Codex at
+`high` reasoning effort, and applies no Claude dollar cap. Change those quality/runtime
+settings in `config.toml` if a particular machine needs a different trade-off.
 
 If the *worker itself* dies, that is terminal. The next `duet_start` on that repository
 records the run as `FAILED` with its evidence preserved. There is no phase-aware resume,
@@ -269,12 +274,13 @@ Everything `setup.sh` does is ordinary configuration; nothing is hidden. Copy
 
 ```bash
 claude mcp add-json --scope user agent_duet \
-  '{"type":"stdio","command":"<path>","args":[],"env":{},"timeout":330000}'
+  '{"type":"stdio","command":"<path>","args":[],"env":{},"timeout":120000}'
 codex mcp add agent_duet -- <path>
 ```
 
-Then add `tool_timeout_sec = 330` and `enabled_tools` to the `[mcp_servers.agent_duet]`
-table Codex wrote — `duet_wait` needs that timeout — and copy `commands/duet.md` into
+Then add `tool_timeout_sec = 120` and `enabled_tools` to the `[mcp_servers.agent_duet]`
+table Codex wrote. `duet_wait` returns within 90 seconds so it stays below Claude Code's
+two-minute MCP auto-background threshold. Copy `commands/duet.md` into
 `~/.claude/commands/` and `~/.codex/prompts/`.
 
 ---

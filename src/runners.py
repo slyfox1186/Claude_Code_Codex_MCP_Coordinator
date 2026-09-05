@@ -5,9 +5,8 @@ Both adapters share the same shape: build an argv *list* (never a shell string),
 the whole dynamic prompt on stdin so task text never lands in a process listing, stream
 both output streams into bounded private log files, and return a structured result.
 
-Flag choices are pinned to the CLIs actually installed on this machine and verified
-against ``--help``; where ``BUILD_SPEC.md`` names a flag that no longer exists, the
-deviation is documented inline.
+Flag choices are pinned to the supported CLI surfaces and verified against ``--help``;
+version-specific compatibility decisions are documented inline.
 """
 
 from __future__ import annotations
@@ -70,9 +69,9 @@ def _empty_mcp_config(run_dir: Path) -> Path:
 def build_claude_argv(cfg: ClaudeConfig, executable: Path, run_dir: Path) -> list[str]:
     """Build the argv for one non-interactive Claude Code phase.
 
-    Deviation from ``BUILD_SPEC.md``: Claude Code 2.1.x has no ``--max-turns`` and no
-    ``--permission-prompts`` flag. Turn limiting is expressed through the optional
-    ``max_budget_usd`` cap instead, and prompt suppression through the permission mode.
+    Claude Code 2.1.236 has no ``--max-turns`` or ``--permission-prompts`` flag. Turn
+    limiting is expressed through the optional ``max_budget_usd`` cap instead, and
+    prompt suppression through the permission mode.
     """
     argv: list[str] = [
         str(executable),
@@ -104,6 +103,7 @@ def build_claude_argv(cfg: ClaudeConfig, executable: Path, run_dir: Path) -> lis
         argv += ["--add-dir", directory]
     if cfg.model:
         argv += ["--model", cfg.model]
+    argv += ["--effort", cfg.effort]
     if cfg.max_budget_usd > 0:
         argv += ["--max-budget-usd", str(cfg.max_budget_usd)]
     argv += list(cfg.extra_args)
@@ -115,9 +115,9 @@ def build_codex_argv(
 ) -> list[str]:
     """Build the argv for the non-interactive Codex review phase.
 
-    Deviation from ``BUILD_SPEC.md``: ``codex exec`` in 0.153.x has no
-    ``--ask-for-approval``; non-interactive runs never prompt, and the sandbox posture
-    is selected with ``--sandbox`` or the explicit bypass flag.
+    ``codex exec`` in 0.153.x has no ``--ask-for-approval``; non-interactive runs never
+    prompt, and the sandbox posture is selected with ``--sandbox`` or the explicit
+    bypass flag.
     """
     argv: list[str] = [str(executable), "exec"]
 
@@ -133,6 +133,7 @@ def build_codex_argv(
         argv.append("--ignore-user-config")
     if cfg.model:
         argv += ["--model", cfg.model]
+    argv += ["-c", f"model_reasoning_effort={json.dumps(cfg.reasoning_effort)}"]
 
     if not cfg.ignore_user_config:
         # Only meaningful when a user config is actually loaded: the override merges

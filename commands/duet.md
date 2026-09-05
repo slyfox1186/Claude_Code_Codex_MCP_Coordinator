@@ -71,11 +71,14 @@ as the tool going behind their back.
 3. **Call `duet_start` exactly once.** Keep the returned `run_id`. Never start a second
    run for the same task; if you think you need one, stop and ask.
 
-4. **Poll with `duet_wait`**, passing that `run_id` and a timeout between 1 and 300
-   seconds. Keep calling it until the phase is `AWAITING_FINALIZE` or terminal
-   (`COMPLETE`, `FAILED`, `CANCELLED`). Between calls, report the phase in one short line
-   so the user can see progress. A run takes minutes, not seconds — that is normal, and
-   the work continues even if this session ends.
+4. **Poll with `duet_wait`**, passing that `run_id` and `timeout_seconds=90`. Keep
+   exactly one `duet_wait` call in flight for the run: wait for its result before calling
+   `duet_wait` or `duet_status` again. If the client moves the call to a background task,
+   wait for that task's result instead of starting another poll. Continue until the phase
+   is `AWAITING_FINALIZE` or terminal (`COMPLETE`, `FAILED`, `CANCELLED`). Between calls,
+   report the phase in one short line so the user can see progress. The detached model
+   work continues independently and can take hours; the 90-second value limits only one
+   status poll, not Claude's or Codex's work.
 
 5. **At `AWAITING_FINALIZE`, stop and report.** Summarize, from the returned evidence
    only:

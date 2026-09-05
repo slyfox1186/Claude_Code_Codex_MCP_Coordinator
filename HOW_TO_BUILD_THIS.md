@@ -160,15 +160,17 @@ parse back:
 |---|---|
 | Writes `$HOME/.config/agent-duet/config.toml` from `config.example.toml`, with the real paths filled in | Copying the example and replacing four `REPLACE_ME` placeholders by hand |
 | `chmod 700` on the config and state directories, `600` on the config | Remembering to, and being refused at load time if you forget |
-| `claude mcp add-json --scope user` with a 330 000 ms timeout | Hand-writing escaped JSON on the command line |
-| `codex mcp add`, then extends that table with `startup_timeout_sec`, `tool_timeout_sec = 330`, and the five-tool allowlist | Hand-editing `$HOME/.codex/config.toml` and not accidentally creating a second table |
+| `claude mcp add-json --scope user` with a 120 000 ms timeout | Hand-writing escaped JSON on the command line |
+| `codex mcp add`, then extends that table with `startup_timeout_sec`, `tool_timeout_sec = 120`, and the five-tool allowlist | Hand-editing `$HOME/.codex/config.toml` and not accidentally creating a second table |
 | Installs `commands/duet.md` into `~/.claude/commands/` and `~/.codex/prompts/` | Copying two files |
 
 It backs up anything it overwrites to `<name>.duet-backup`, never uses `sudo`, and is safe
 to run repeatedly.
 
-The 330 s timeouts are not decoration: `duet_wait` deliberately blocks for up to 300 s, and
-a client timeout below that kills a healthy call.
+`duet_wait` is hard-capped at 90 seconds so it returns before Claude Code's two-minute
+automatic MCP backgrounding threshold. The 120-second client timeout leaves room for
+transport overhead. The detached worker and its Claude/Codex phase timeouts are separate,
+so shorter polling never shortens model work.
 
 **Checks**
 
@@ -345,7 +347,7 @@ merely reads like one just has to be renamed. Then finalize again with the same 
 |---|---|---|
 | `ModuleNotFoundError: No module named 'agent_duet'` | someone created `src/agent_duet/` | move the modules back up into `src/` and reinstall |
 | MCP server will not connect | the stored command is not an absolute path | re-register with `$(command -v agent-duet)` |
-| Tool call times out around 60 s | client tool timeout below 330 s | set `tool_timeout_sec = 330` / `"timeout": 330000` |
+| Tool call times out around 60 s | client tool timeout below 120 s | set `tool_timeout_sec = 120` / `"timeout": 120000` |
 | `Error loading config.toml: invalid transport` from Codex | an MCP override was passed alongside `--ignore-user-config` | already fixed in this version; confirm you are on current `main` |
 | Codex phase fails immediately | Codex is not logged in | run `codex` interactively once and sign in |
 | Run stuck non-terminal after a reboot | the worker died with the machine | the next `duet_start` on that repo records it `FAILED`; start a new run |

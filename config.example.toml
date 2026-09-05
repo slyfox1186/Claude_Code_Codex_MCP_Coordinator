@@ -14,8 +14,11 @@ allowed_repo_roots = ["/home/REPLACE_ME/work"]
 state_dir = "/home/REPLACE_ME/.local/state/agent-duet"
 
 max_parallel_global = 1
+# Safety ceiling for each Claude/Codex phase. This is separate from status polling.
 phase_timeout_seconds = 7200
-wait_max_seconds = 300
+# Keep one long-poll below Claude Code's two-minute MCP auto-background threshold.
+# Values through 300 remain loadable for upgrades, but the server hard-caps them at 90.
+wait_max_seconds = 90
 log_max_bytes_per_stream = 25000000
 
 # "inherit" gives child agents your full environment, so they can use every credential
@@ -40,6 +43,8 @@ disallowed_tools = ["mcp__*"]
 
 # Optional. "" means the CLI default.
 model = ""
+# Quality-first default. Claude Code falls back to high on models without xhigh.
+effort = "xhigh"
 
 # 0 disables the cap. Claude Code 2.1.x has no --max-turns; this is the equivalent brake.
 max_budget_usd = 0.0
@@ -59,6 +64,8 @@ sandbox_mode = "bypass"
 ignore_user_config = true
 ephemeral = true
 model = ""
+# Passed explicitly because ignore_user_config also ignores your personal effort setting.
+reasoning_effort = "high"
 
 # "warn" records any repository mutation the reviewer caused as evidence and passes a
 # note to the reconciliation phase. "fail" aborts the run instead.

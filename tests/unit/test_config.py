@@ -203,6 +203,17 @@ def test_full_access_defaults_are_the_shipped_posture(tmp_path, work_root):
     assert "mcp__*" in config.claude.disallowed_tools
 
 
+def test_quality_defaults_are_explicit_and_waits_stay_foreground_safe(tmp_path, work_root):
+    """Provider defaults must not silently downgrade a deliberately thorough run."""
+    config = load_config(write(tmp_path, base_body(work_root, tmp_path / "state")))
+    assert config.claude.effort == "xhigh"
+    assert config.codex.reasoning_effort == "high"
+    assert config.claude.timeout_seconds == 7200
+    assert config.codex.timeout_seconds == 7200
+    assert config.phase_timeout_seconds == 7200
+    assert config.wait_max_seconds == 90
+
+
 def test_state_dirs_are_private(config):
     from agent_duet.config import ensure_state_dirs
 

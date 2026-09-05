@@ -797,7 +797,7 @@ def test_codex_health_rejects_config_without_all_five_tools(tmp_path: Path) -> N
     codex_home.joinpath("config.toml").write_text(
         f'''[mcp_servers.agent_duet]
 command = "{tmp_path / "bin/agent-duet"}"
-tool_timeout_sec = 330
+tool_timeout_sec = 120
 enabled_tools = ["duet_start", "duet_status", "duet_wait", "duet_cancel"]
 '''
     )
@@ -826,7 +826,7 @@ def test_codex_health_rejects_directory_as_command(tmp_path: Path) -> None:
     codex_home.joinpath("config.toml").write_text(
         f'''[mcp_servers.agent_duet]
 command = "{tmp_path / "bin"}"
-tool_timeout_sec = 330
+tool_timeout_sec = 120
 enabled_tools = ["duet_start", "duet_status", "duet_wait", "duet_cancel", "duet_finalize"]
 '''
     )

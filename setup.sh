@@ -481,9 +481,9 @@ PY
   step "Registering agent-duet with Claude Code"
   claude mcp remove agent_duet --scope user >/dev/null 2>&1 || true
   claude mcp add-json --scope user agent_duet \
-    "{\"type\":\"stdio\",\"command\":\"$duet_bin\",\"args\":[],\"env\":{},\"timeout\":330000}" \
+    "{\"type\":\"stdio\",\"command\":\"$duet_bin\",\"args\":[],\"env\":{},\"timeout\":120000}" \
     >/dev/null || die "claude mcp add-json failed."
-  ok "registered (330s tool timeout, which duet_wait needs)"
+  ok "registered (120s tool timeout; duet_wait returns within 90s)"
 
   step "Registering agent-duet with Codex"
   codex mcp remove agent_duet >/dev/null 2>&1 || true
@@ -497,8 +497,8 @@ desired = f'''[mcp_servers.agent_duet]
 command = "{duet_bin}"
 args = []
 startup_timeout_sec = 20
-# duet_wait blocks for up to 300s, so the tool timeout must sit above that.
-tool_timeout_sec = 330
+# duet_wait is hard-capped at 90s; this leaves transport overhead without a long hang.
+tool_timeout_sec = 120
 enabled_tools = ["duet_start", "duet_status", "duet_wait", "duet_cancel", "duet_finalize"]
 '''
 
@@ -524,7 +524,7 @@ else:
 parsed = tomllib.loads(updated)                 # never write a broken codex config
 entry = parsed["mcp_servers"]["agent_duet"]
 assert entry["command"] == duet_bin, entry
-assert entry["tool_timeout_sec"] == 330, entry
+assert entry["tool_timeout_sec"] == 120, entry
 assert set(entry["enabled_tools"]) == {
     "duet_start", "duet_status", "duet_wait", "duet_cancel", "duet_finalize"
 }, entry
@@ -770,7 +770,7 @@ try:
         and pathlib.Path(command).is_file()
         and os.access(command, os.X_OK)
         and set(enabled_tools) == required_tools
-        and tool_timeout >= 330
+        and tool_timeout >= 120
     )
 except (KeyError, OSError, TypeError, ValueError, tomllib.TOMLDecodeError):
     valid = False

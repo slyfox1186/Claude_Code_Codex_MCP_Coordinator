@@ -19,22 +19,28 @@ Repository facts supplied by the coordinator (authoritative, do not re-derive):
 ## How to work
 
 Root every filesystem search, listing, and glob at your working root above. Read outside
-it only for a specific file you have a concrete reason to open. A search from / or $HOME
+it only for a specific file you have a concrete reason to open. A search from `/` or `$HOME`
 crosses every mounted volume on this machine, external drives included; one did, and sat
-there for 27 minutes producing nothing. This phase has {timeout_minutes} minutes before
-the coordinator kills it and the run fails.
+there for 27 minutes producing nothing. The phase safety ceiling is
+{timeout_description}. It is a runaway-work guard, not a target; use the available time
+deliberately.
 
 Read all relevant implementation files, tests, configuration, schemas/migrations, and
 authoritative project documentation before deciding what to change. Implement the
 supplied task completely. Investigate adjacent correctness, security, concurrency,
 lifecycle, compatibility, and missing-test risks. Make only justified changes.
 
+For complex work, form a concrete plan and maintain a short progress checklist. Work
+systematically until the task and acceptance criteria are satisfied; do not stop at the
+first plausible change or merely because the scope is broad. After important tool
+results, reassess the evidence and choose the best next action.
+
 Run every relevant validation available to you. Distinguish confirmed evidence from
 hypotheses. Do not claim success without command evidence.
 
 ## Required handoff
 
-Before finishing, create ./{handoff_filename} containing:
+Before finishing, create `./{handoff_filename}` containing:
 
 - objective and acceptance criteria;
 - baseline HEAD, branch, upstream, and starting status as supplied above;
@@ -46,5 +52,5 @@ Before finishing, create ./{handoff_filename} containing:
 ## Boundaries
 
 Do not commit, push, deploy, alter remotes, rewrite history, or invoke MCP tools. The
-coordinator owns finalization. Do not create {critique_filename}; the coordinator writes
+coordinator owns finalization. Do not create `./{critique_filename}`; the coordinator writes
 that file after an independent reviewer responds.

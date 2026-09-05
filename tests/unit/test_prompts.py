@@ -15,6 +15,7 @@ from string import Formatter
 import pytest
 
 SRC = Path(__file__).resolve().parents[2] / "src"
+ROOT = SRC.parent
 PROMPTS = SRC / "prompts"
 TEMPLATES = ("claude_implement.md", "codex_review.md", "claude_reconcile.md")
 
@@ -78,14 +79,46 @@ def test_every_child_is_told_to_keep_searches_inside_its_working_root(name):
     assert "Root every filesystem search" in text
     assert "$HOME" in text, "must name the roots that go wrong, not just say 'be careful'"
     assert "mounted volume" in text, "must say why an unscoped search is expensive"
-    assert "{timeout_minutes} minutes" in text, "must tell the phase its own deadline"
+    assert "{timeout_description}" in text, "must tell the phase its own deadline"
 
 
 def test_the_phase_deadline_comes_from_the_configured_timeout():
     """The number in the prompt has to be the number the coordinator actually enforces."""
     source = (SRC / "worker.py").read_text()
-    assert source.count("timeout_minutes=self.config.claude.timeout_seconds // 60") == 2
-    assert source.count("timeout_minutes=self.config.codex.timeout_seconds // 60") == 1
+    assert source.count("timeout_description=self._phase_timeout_description(") == 3
+    assert source.count("timeout_seconds=phase_timeout") == 3
+
+
+def test_phase_deadline_uses_the_tighter_global_safety_ceiling(config, store):
+    from agent_duet.worker import Worker
+
+    configured = config.model_copy(update={"phase_timeout_seconds": 90})
+    worker = Worker(configured, store, "unused-run-id")
+    assert worker._phase_timeout_seconds(7200) == 90
+    assert worker._phase_timeout_description(7200) == "90 seconds"
+
+
+@pytest.mark.parametrize("name", TEMPLATES)
+def test_every_child_is_told_to_work_deliberately_until_its_role_is_complete(name):
+    text = " ".join((PROMPTS / name).read_text().lower().split())
+    assert "work systematically" in text
+    assert "first plausible" in text
+
+
+def test_duet_command_keeps_only_one_foreground_safe_wait_in_flight():
+    text = (ROOT / "commands" / "duet.md").read_text()
+    assert "timeout_seconds=90" in text
+    assert "exactly one `duet_wait` call in flight" in text
+    assert "background task" in text
+
+
+def test_server_instructions_keep_the_whole_critical_contract_in_512_characters():
+    from agent_duet.server import INSTRUCTIONS
+
+    assert len(INSTRUCTIONS) <= 512
+    assert "exactly one `duet_wait`" in INSTRUCTIONS
+    assert "user approval before `duet_finalize`" in INSTRUCTIONS
+    assert "Never claim commit, push, deploy, or success" in INSTRUCTIONS
 
 
 def test_a_run_keeps_the_templates_it_started_with(tmp_path, monkeypatch):

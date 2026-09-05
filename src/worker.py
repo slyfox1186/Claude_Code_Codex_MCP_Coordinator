@@ -128,6 +128,17 @@ class Worker:
         path.mkdir(parents=True, exist_ok=True, mode=0o700)
         return path
 
+    def _phase_timeout_seconds(self, provider_timeout_seconds: int) -> int:
+        """Return the actual phase ceiling enforced by ``run_child``."""
+        return min(provider_timeout_seconds, self.config.phase_timeout_seconds)
+
+    def _phase_timeout_description(self, provider_timeout_seconds: int) -> str:
+        seconds = self._phase_timeout_seconds(provider_timeout_seconds)
+        minutes, remainder = divmod(seconds, 60)
+        if remainder == 0:
+            return f"{minutes} minute{'s' if minutes != 1 else ''} ({seconds} seconds)"
+        return f"{seconds} seconds"
+
     def _template(self, name: str) -> str:
         """Read one prompt template from this run's pinned copy, not the package."""
         return (_pin_templates(self._run_dir()) / name).read_text(encoding="utf-8")
@@ -313,9 +324,12 @@ class Worker:
             summary="Claude is implementing the task.",
         )
         info = inspect_repo(worktree)
+        phase_timeout = self._phase_timeout_seconds(self.config.claude.timeout_seconds)
         prompt = self._template("claude_implement.md").format(
             worktree=worktree,
-            timeout_minutes=self.config.claude.timeout_seconds // 60,
+            timeout_description=self._phase_timeout_description(
+                self.config.claude.timeout_seconds
+            ),
             repo_path=record.repo_path,
             branch=record.branch or info.branch or "(detached)",
             base_sha=record.base_sha or info.head_sha,
@@ -337,9 +351,7 @@ class Worker:
             cwd=worktree,
             log_dir=run_dir,
             log_prefix="phase1-claude",
-            timeout_seconds=min(
-                self.config.claude.timeout_seconds, self.config.phase_timeout_seconds
-            ),
+            timeout_seconds=phase_timeout,
             max_log_bytes=self.config.log_max_bytes_per_stream,
             env_mode=self.config.child_env_mode,
             cancel_check=self._cancel_requested,
@@ -351,7 +363,7 @@ class Worker:
         if result.timed_out:
             raise PhaseFailure(
                 "the implementation phase exceeded its "
-                f"{self.config.claude.timeout_seconds}s timeout"
+                f"{phase_timeout}s timeout"
             )
         if not result.ok:
             raise PhaseFailure(
@@ -423,9 +435,12 @@ class Worker:
             },
         )
 
+        phase_timeout = self._phase_timeout_seconds(self.config.codex.timeout_seconds)
         prompt = self._template("codex_review.md").format(
             worktree=worktree,
-            timeout_minutes=self.config.codex.timeout_seconds // 60,
+            timeout_description=self._phase_timeout_description(
+                self.config.codex.timeout_seconds
+            ),
             base_sha=record.base_sha or "",
             current_sha=before.head_sha,
             branch=record.branch or "(detached)",
@@ -446,9 +461,7 @@ class Worker:
             cwd=worktree,
             log_dir=run_dir,
             log_prefix="phase2-codex",
-            timeout_seconds=min(
-                self.config.codex.timeout_seconds, self.config.phase_timeout_seconds
-            ),
+            timeout_seconds=phase_timeout,
             max_log_bytes=self.config.log_max_bytes_per_stream,
             env_mode=self.config.child_env_mode,
             cancel_check=self._cancel_requested,
@@ -459,7 +472,7 @@ class Worker:
             raise Cancelled("cancelled during the review phase")
         if result.timed_out:
             raise PhaseFailure(
-                f"the review phase exceeded its {self.config.codex.timeout_seconds}s timeout"
+                f"the review phase exceeded its {phase_timeout}s timeout"
             )
         if not result.ok:
             raise PhaseFailure(
@@ -570,9 +583,12 @@ class Worker:
             summary="Claude is adjudicating the critique and fixing justified findings.",
         )
         info = inspect_repo(worktree)
+        phase_timeout = self._phase_timeout_seconds(self.config.claude.timeout_seconds)
         prompt = self._template("claude_reconcile.md").format(
             worktree=worktree,
-            timeout_minutes=self.config.claude.timeout_seconds // 60,
+            timeout_description=self._phase_timeout_description(
+                self.config.claude.timeout_seconds
+            ),
             repo_path=record.repo_path,
             branch=record.branch or info.branch or "(detached)",
             base_sha=record.base_sha or "",
@@ -593,9 +609,7 @@ class Worker:
             cwd=worktree,
             log_dir=run_dir,
             log_prefix="phase3-claude",
-            timeout_seconds=min(
-                self.config.claude.timeout_seconds, self.config.phase_timeout_seconds
-            ),
+            timeout_seconds=phase_timeout,
             max_log_bytes=self.config.log_max_bytes_per_stream,
             env_mode=self.config.child_env_mode,
             cancel_check=self._cancel_requested,
@@ -607,7 +621,7 @@ class Worker:
         if result.timed_out:
             raise PhaseFailure(
                 "the reconciliation phase exceeded its "
-                f"{self.config.claude.timeout_seconds}s timeout"
+                f"{phase_timeout}s timeout"
             )
         if not result.ok:
             raise PhaseFailure(

@@ -13,8 +13,10 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from agent_duet.artifacts import CRITIQUE_FILENAME, atomic_write_text
@@ -23,11 +25,13 @@ from agent_duet.git_guard import changed_paths, combined_diff_sha256, owned_tree
 from agent_duet.models import Evidence, Phase, StartRequest
 from agent_duet.process_guard import process_alive, terminate_process_group
 from agent_duet.server import (
+    RUNTIME,
     ToolError,
     _reap_dead_runs,
     _status_with_liveness,
     _worker_vanished,
     create_run,
+    duet_wait,
 )
 from agent_duet.state import StateError, StateStore
 from agent_duet.worker import Worker
@@ -778,3 +782,122 @@ def test_an_explicit_delivery_mode_still_beats_the_configured_one(config, store,
 
     assert status.branch == "main"
     assert store.get(status.run_id).delivery_mode == "direct_branch"
+
+
+# ---------------------------------------------------------------------------
+# Defect: a 300-second wait is backgrounded by Claude Code after two minutes
+# ---------------------------------------------------------------------------
+
+
+def test_duet_wait_caps_legacy_300_second_configs_below_the_client_background_limit(
+    config, store, repo, monkeypatch
+):
+    """Existing configs may still say 300, but a tool call must return within 90s."""
+    configured = config.model_copy(update={"wait_max_seconds": 300})
+    record = start(configured, store, repo)
+    observed: list[int] = []
+
+    def immediate_wait(run_id, *, since, timeout_seconds):
+        del since
+        observed.append(timeout_seconds)
+        return store.get(run_id)
+
+    monkeypatch.setattr(store, "wait_for_change", immediate_wait)
+    RUNTIME._config, RUNTIME._store = configured, store
+    try:
+        asyncio.run(duet_wait(UUID(record.run_id), timeout_seconds=300))
+    finally:
+        RUNTIME.reset()
+
+    assert observed == [90]
+
+
+def test_concurrent_duet_wait_calls_do_not_create_duplicate_pollers(
+    config, store, repo, monkeypatch
+):
+    """A second client call for one run must not start another polling thread."""
+    configured = config.model_copy(update={"wait_max_seconds": 90})
+    record = start(configured, store, repo)
+    entered = threading.Event()
+    release = threading.Event()
+    call_count = 0
+    count_lock = threading.Lock()
+
+    def blocking_wait(run_id, *, since, timeout_seconds):
+        nonlocal call_count
+        del since, timeout_seconds
+        with count_lock:
+            call_count += 1
+        entered.set()
+        assert release.wait(2), "test did not release the polling thread"
+        return store.get(run_id)
+
+    monkeypatch.setattr(store, "wait_for_change", blocking_wait)
+    RUNTIME._config, RUNTIME._store = configured, store
+
+    async def overlap_waits():
+        first = asyncio.create_task(duet_wait(UUID(record.run_id), timeout_seconds=90))
+        assert await asyncio.to_thread(entered.wait, 1), "first poller never started"
+        second = asyncio.create_task(duet_wait(UUID(record.run_id), timeout_seconds=90))
+        await asyncio.sleep(0.05)
+        with count_lock:
+            overlapping_pollers = call_count
+        release.set()
+        first_status, second_status = await asyncio.gather(first, second)
+        return overlapping_pollers, first_status, second_status
+
+    try:
+        overlapping_pollers, first_status, second_status = asyncio.run(overlap_waits())
+    finally:
+        release.set()
+        RUNTIME.reset()
+
+    assert overlapping_pollers == 1
+    assert first_status.run_id == second_status.run_id
+    assert "already active" in second_status.next_action
+
+
+def test_cancelled_duet_wait_keeps_its_poller_and_refuses_a_duplicate(
+    config, store, repo, monkeypatch
+):
+    """Client backgrounding must not cancel the underlying status poll."""
+    configured = config.model_copy(update={"wait_max_seconds": 90})
+    record = start(configured, store, repo)
+    entered = threading.Event()
+    release = threading.Event()
+    call_count = 0
+    count_lock = threading.Lock()
+
+    def blocking_wait(run_id, *, since, timeout_seconds):
+        nonlocal call_count
+        del since, timeout_seconds
+        with count_lock:
+            call_count += 1
+        entered.set()
+        assert release.wait(2), "test did not release the polling thread"
+        return store.get(run_id)
+
+    monkeypatch.setattr(store, "wait_for_change", blocking_wait)
+    RUNTIME._config, RUNTIME._store = configured, store
+
+    async def cancel_then_retry():
+        first = asyncio.create_task(duet_wait(UUID(record.run_id), timeout_seconds=90))
+        assert await asyncio.to_thread(entered.wait, 1), "first poller never started"
+        first.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await first
+        second_status = await duet_wait(UUID(record.run_id), timeout_seconds=90)
+        with count_lock:
+            pollers_after_cancellation = call_count
+        release.set()
+        await asyncio.sleep(0.05)
+        return pollers_after_cancellation, second_status
+
+    try:
+        pollers_after_cancellation, second_status = asyncio.run(cancel_then_retry())
+    finally:
+        release.set()
+        RUNTIME.reset()
+
+    assert pollers_after_cancellation == 1
+    assert "already active" in second_status.next_action

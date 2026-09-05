@@ -72,6 +72,11 @@ def test_claude_argv_full_access_by_default(claude_cfg, tmp_path):
     assert "--allowedTools" not in argv, "empty allowed_tools means the full toolset"
 
 
+def test_claude_argv_sets_the_configured_effort(claude_cfg, tmp_path):
+    argv = build_claude_argv(claude_cfg, Path("/bin/claude"), tmp_path)
+    assert argv[argv.index("--effort") + 1] == "xhigh"
+
+
 def test_claude_argv_honours_a_restricted_posture(tmp_path):
     cfg = ClaudeConfig(
         executable=str(FIXTURE_BIN / "fake-claude"),
@@ -150,6 +155,14 @@ def test_codex_argv_isolates_mcp_and_user_config(codex_cfg, tmp_path):
     argv = build_codex_argv(codex_cfg, Path("/bin/codex"), tmp_path, tmp_path / "last.md")
     assert "--ignore-user-config" in argv
     assert "mcp_servers.agent_duet.enabled=false" not in argv
+
+
+def test_codex_argv_preserves_reasoning_effort_when_user_config_is_ignored(
+    codex_cfg, tmp_path
+):
+    argv = build_codex_argv(codex_cfg, Path("/bin/codex"), tmp_path, tmp_path / "last.md")
+    overrides = [argv[index + 1] for index, item in enumerate(argv) if item == "-c"]
+    assert 'model_reasoning_effort="high"' in overrides
 
 
 def test_codex_argv_is_ephemeral_and_json(codex_cfg, tmp_path):

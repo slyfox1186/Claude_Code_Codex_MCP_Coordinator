@@ -23,10 +23,17 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 APP_NAME = "agent-duet"
 
+# Claude Code 2.1.212+ automatically backgrounds MCP calls after two minutes.
+# Long-running model work is detached from the MCP request; this cap applies only to
+# status polling and leaves a 30-second margin below that client boundary.
+FOREGROUND_WAIT_MAX_SECONDS = 90
+LEGACY_WAIT_INPUT_MAX_SECONDS = 300
+
 #: Permission modes accepted by `claude --permission-mode` in Claude Code 2.x.
 ClaudePermissionMode = Literal[
     "acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"
 ]
+ClaudeEffort = Literal["low", "medium", "high", "xhigh", "max"]
 
 #: `codex exec --sandbox` values, plus "bypass" meaning
 #: `--dangerously-bypass-approvals-and-sandbox` (no OS sandbox at all).
@@ -74,6 +81,7 @@ class ClaudeConfig(BaseModel):
     #: Always enforced on top of whatever is configured; blocks MCP recursion.
     disallowed_tools: list[str] = Field(default_factory=lambda: ["mcp__*"])
     model: str = ""
+    effort: ClaudeEffort = "xhigh"
     max_budget_usd: float = Field(default=0.0, ge=0.0)
     #: Extra directories the child may touch, beyond its working root.
     extra_dirs: list[str] = Field(default_factory=list)
@@ -92,6 +100,11 @@ class CodexConfig(BaseModel):
     ignore_user_config: bool = True
     ephemeral: bool = True
     model: str = ""
+    #: Passed explicitly because ``ignore_user_config`` also discards the user's effort.
+    #: Values are model-advertised, so do not freeze this to today's enum.
+    reasoning_effort: str = Field(
+        default="high", min_length=1, max_length=32, pattern=r"^[a-z][a-z0-9_-]*$"
+    )
     #: "warn" records reviewer-caused repository mutations as evidence and continues;
     #: "fail" aborts the run. "fail" is only meaningful with a read-only sandbox.
     write_policy: Literal["warn", "fail"] = "warn"
@@ -171,7 +184,9 @@ class Config(BaseModel):
     state_dir: str
     max_parallel_global: int = Field(default=1, ge=1, le=16)
     phase_timeout_seconds: int = Field(default=7200, ge=60, le=86_400)
-    wait_max_seconds: int = Field(default=300, ge=1, le=300)
+    # Keep accepting the old 300-second setting so upgrades do not invalidate existing
+    # config files. The server always applies FOREGROUND_WAIT_MAX_SECONDS as a hard cap.
+    wait_max_seconds: int = Field(default=FOREGROUND_WAIT_MAX_SECONDS, ge=1, le=300)
     log_max_bytes_per_stream: int = Field(default=25_000_000, ge=10_000, le=1_000_000_000)
     #: Verbosity of the coordinator's own process logs. AGENT_DUET_LOG_LEVEL overrides it.
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "DEBUG"

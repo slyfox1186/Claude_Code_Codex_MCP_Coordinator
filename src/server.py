@@ -30,7 +30,15 @@ from mcp.types import ToolAnnotations
 
 from . import __version__
 from .artifacts import CRITIQUE_FILENAME, HANDOFF_FILENAME, scan_commit_set
-from .config import Config, ConfigError, config_path, ensure_state_dirs, load_config
+from .config import (
+    FOREGROUND_WAIT_MAX_SECONDS,
+    LEGACY_WAIT_INPUT_MAX_SECONDS,
+    Config,
+    ConfigError,
+    config_path,
+    ensure_state_dirs,
+    load_config,
+)
 from .git_guard import (
     GitError,
     RepoLockedError,
@@ -75,12 +83,13 @@ from .state import RunRecord, StateError, StateStore, default_next_action, new_r
 logger = logging.getLogger("agent_duet")
 
 INSTRUCTIONS = (
-    "Use agent_duet only for a Claude->Codex->Claude implementation/review workflow. "
-    "Call duet_start exactly once, retain its run_id, and call duet_wait with that "
-    "run_id until a terminal state or AWAITING_FINALIZE. Never start a duplicate for "
-    "the same task. Never call from a child run. At AWAITING_FINALIZE, summarize "
-    "evidence and ask the user before duet_finalize; do not imply commit, push, "
-    "deploy, or success without returned evidence."
+    "Use `agent_duet` for Claude->Codex->Claude work. Call `duet_start` once; retain "
+    "`run_id`. Keep exactly one `duet_wait` in flight with "
+    f"`timeout_seconds={FOREGROUND_WAIT_MAX_SECONDS}`; await it before new `duet_wait` "
+    "or `duet_status`. If client backgrounds it, await it; do not repoll. Continue to "
+    "terminal or `AWAITING_FINALIZE`. Never start a duplicate run or call from a child. "
+    "At `AWAITING_FINALIZE`, summarize evidence and get user approval before "
+    "`duet_finalize`. Never claim commit, push, deploy, or success without returned evidence."
 )
 
 mcp: MCPServer[Any] = MCPServer(
@@ -113,6 +122,21 @@ class _Runtime:
 
 
 RUNTIME = _Runtime()
+
+# One stdio server can receive another tool request while Claude Code is tracking the
+# first as a background task. Keep the original polling task alive if its request is
+# cancelled, and refuse to create a second polling thread for the same durable run.
+_ACTIVE_WAIT_TASKS: dict[str, asyncio.Task[RunRecord]] = {}
+
+
+def _clear_active_wait(run_id: str, task: asyncio.Task[RunRecord]) -> None:
+    if _ACTIVE_WAIT_TASKS.get(run_id) is task:
+        _ACTIVE_WAIT_TASKS.pop(run_id, None)
+    if not task.cancelled():
+        # Retrieve a detached task's exception so client cancellation cannot produce an
+        # unhandled-task warning. A still-attached caller receives the same exception.
+        with contextlib.suppress(Exception):
+            task.exception()
 
 
 class ToolError(McpToolError):
@@ -335,8 +359,10 @@ async def duet_start(
     )
     return updated.to_status(
         next_action=(
-            f"Keep run_id {run_id}. Call duet_wait with it until the phase is "
-            "AWAITING_FINALIZE or terminal. Do not start another run for this task."
+            f"Keep run_id {run_id}. Call duet_wait once with timeout_seconds="
+            f"{FOREGROUND_WAIT_MAX_SECONDS}, then wait for that response before polling "
+            "again. Continue until AWAITING_FINALIZE or terminal. Do not start another "
+            "run for this task."
         )
     )
 
@@ -375,31 +401,58 @@ async def duet_status(run_id: UUID) -> RunStatus:
         open_world_hint=False,
     )
 )
-async def duet_wait(run_id: UUID, timeout_seconds: int = 120) -> RunStatus:
-    """Wait up to timeout_seconds (1-300) for the run to change phase, then return.
+async def duet_wait(
+    run_id: UUID, timeout_seconds: int = FOREGROUND_WAIT_MAX_SECONDS
+) -> RunStatus:
+    """Wait briefly for one run to change phase, then return its durable status.
 
-    Always returns a status object rather than holding the client indefinitely. No side
-    effects; call it repeatedly until the phase is AWAITING_FINALIZE or terminal.
+    Accepts legacy inputs through 300 seconds, but the effective wait is always capped at
+    90 seconds so Claude Code keeps the call in the foreground. Keep only one call in
+    flight for a run and wait for its response before polling again. No side effects.
     """
     config, store = _runtime()
-    if not 1 <= timeout_seconds <= 300:
+    if not 1 <= timeout_seconds <= LEGACY_WAIT_INPUT_MAX_SECONDS:
         raise _fail(
-            f"timeout_seconds must be between 1 and 300; got {timeout_seconds}"
+            "timeout_seconds must be between 1 and "
+            f"{LEGACY_WAIT_INPUT_MAX_SECONDS}; got {timeout_seconds}"
         )
-    bounded = min(int(timeout_seconds), config.wait_max_seconds)
+    bounded = min(
+        int(timeout_seconds), config.wait_max_seconds, FOREGROUND_WAIT_MAX_SECONDS
+    )
     try:
         current = store.get(run_id)
     except StateError as exc:
         raise _fail(str(exc)) from exc
+
+    run_key = str(run_id)
+    active = _ACTIVE_WAIT_TASKS.get(run_key)
+    if active is not None and not active.done():
+        logger.info("duet_wait %s: returning without starting a duplicate poller", run_id)
+        status = _status_with_liveness(current)
+        status.next_action = (
+            "A duet_wait call is already active for this run. Do not start another poll "
+            "or call duet_status; wait for the active call's result."
+        )
+        return status
+
     logger.info(
         "duet_wait %s: waiting up to %ds from phase %s", run_id, bounded, current.phase.value
     )
-    record = await asyncio.to_thread(
-        store.wait_for_change,
-        str(run_id),
-        since=current.updated_at,
-        timeout_seconds=bounded,
+    wait_task = asyncio.create_task(
+        asyncio.to_thread(
+            store.wait_for_change,
+            run_key,
+            since=current.updated_at,
+            timeout_seconds=bounded,
+        )
     )
+    _ACTIVE_WAIT_TASKS[run_key] = wait_task
+
+    def clear_completed_wait(completed: asyncio.Task[RunRecord]) -> None:
+        _clear_active_wait(run_key, completed)
+
+    wait_task.add_done_callback(clear_completed_wait)
+    record = await asyncio.shield(wait_task)
     status = _status_with_liveness(record)
     logger.info("duet_wait %s -> %s (terminal=%s)", run_id, status.phase.value, status.terminal)
     return status
@@ -1210,6 +1263,16 @@ def doctor(config_path: Path | None = None) -> int:
     lines.append(
         f"child access: claude={claude_posture}, codex sandbox={config.codex.sandbox_mode}, "
         f"env={config.child_env_mode}"
+    )
+    lines.append(
+        f"child quality: claude effort={config.claude.effort}, "
+        f"codex reasoning={config.codex.reasoning_effort}, "
+        f"phase safety ceiling={config.phase_timeout_seconds}s"
+    )
+    lines.append(
+        "status poll: "
+        f"{min(config.wait_max_seconds, FOREGROUND_WAIT_MAX_SECONDS)}s effective "
+        f"({config.wait_max_seconds}s configured)"
     )
 
     try:

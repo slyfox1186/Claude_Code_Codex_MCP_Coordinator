@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from .config import FOREGROUND_WAIT_MAX_SECONDS
 from .models import TERMINAL_PHASES, Evidence, Phase, RunStatus, transition_allowed
 
 SCHEMA_VERSION = 1
@@ -173,7 +174,11 @@ def default_next_action(phase: Phase) -> str:
         case Phase.CANCELLED:
             return "Run cancelled. Nothing was committed, pushed, or deployed."
         case _:
-            return "Still running. Call duet_wait with this run_id for a bounded wait."
+            return (
+                "Still running. Call duet_wait once with this run_id and "
+                f"timeout_seconds={FOREGROUND_WAIT_MAX_SECONDS}; wait for its result before "
+                "calling duet_wait or duet_status again."
+            )
 
 
 class StateStore:
